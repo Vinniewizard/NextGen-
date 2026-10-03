@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Search, ShieldCheck, CheckCircle2, AlertCircle, Clock, 
-  RefreshCw, ChevronRight, Lock, ArrowLeft, MessageSquare, Zap
+  RefreshCw, ChevronRight, Lock, ArrowLeft, MessageSquare, Zap, X, Filter
 } from 'lucide-react';
 import { P2POrder, TradeSession, UserInfo } from './p2p/P2PTypes';
 import P2PNavigation from './p2p/P2PNavigation';
@@ -35,6 +35,7 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
   const [amountFilter, setAmountFilter] = useState<string>('');
   const [verifiedOnly, setVerifiedOnly] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'price' | 'completion' | 'orders'>('price');
+  const [advertiserSearch, setAdvertiserSearch] = useState<string>('');
 
   // Data state
   const [orders, setOrders] = useState<P2POrder[]>([]);
@@ -43,6 +44,10 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
   const [currentOrder, setCurrentOrder] = useState<P2POrder | null>(null);
   const [currentTradeBuyerEmail, setCurrentTradeBuyerEmail] = useState('');
   const [currentTradeSellerEmail, setCurrentTradeSellerEmail] = useState('');
+
+  // Orders Tab Search & Status Filtering
+  const [tradesSearchQuery, setTradesSearchQuery] = useState<string>('');
+  const [tradesStatusFilter, setTradesStatusFilter] = useState<'all' | 'pending' | 'completed' | 'cancelled'>('all');
 
   // The Overs (expanded order row drawer) & Modal
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
@@ -407,6 +412,14 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
 
     if (verifiedOnly && !order.is_verified) return false;
 
+    if (advertiserSearch.trim()) {
+      const q = advertiserSearch.toLowerCase().trim();
+      const matchMerchant = (order.merchant_name || '').toLowerCase().includes(q);
+      const matchPayment = (order.paymentMethod || '').toLowerCase().includes(q);
+      const matchCoin = (order.coin || '').toLowerCase().includes(q);
+      if (!matchMerchant && !matchPayment && !matchCoin) return false;
+    }
+
     return true;
   }).sort((a, b) => {
     if (sortBy === 'price') {
@@ -436,6 +449,41 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
 
   const activeEscrows = activeTrades.filter(t => t.status === 'open' || t.status === 'paid');
   const activeEscrowsCount = activeEscrows.length;
+
+  // Counts for Orders tab status filter badges
+  const pendingTradesCount = activeTrades.filter(t => t.status === 'open' || t.status === 'paid' || t.status === 'disputed').length;
+  const completedTradesCount = activeTrades.filter(t => t.status === 'completed').length;
+  const cancelledTradesCount = activeTrades.filter(t => t.status === 'cancelled').length;
+
+  // Filtered active and past trades by search query and status
+  const filteredTrades = activeTrades.filter(trade => {
+    // 1. Status Filter
+    if (tradesStatusFilter === 'pending') {
+      if (trade.status !== 'open' && trade.status !== 'paid' && trade.status !== 'disputed') return false;
+    } else if (tradesStatusFilter === 'completed') {
+      if (trade.status !== 'completed') return false;
+    } else if (tradesStatusFilter === 'cancelled') {
+      if (trade.status !== 'cancelled') return false;
+    }
+
+    // 2. Search Query Filter by Asset Name, Counterparty or Order ID
+    if (tradesSearchQuery.trim()) {
+      const q = tradesSearchQuery.toLowerCase().trim();
+      const assetMatch = (trade.coin || '').toLowerCase().includes(q);
+      const idMatch = (trade.id || '').toLowerCase().includes(q);
+      const buyerMatch = (trade.buyer_id || '').toLowerCase().includes(q);
+      const sellerMatch = (trade.seller_id || '').toLowerCase().includes(q);
+      const isMeBuyer = effectiveUser && trade.buyer_id === effectiveUser.id;
+      const counterpartyText = isMeBuyer ? (trade.seller_id || '') : (trade.buyer_id || '');
+      const counterpartyMatch = counterpartyText.toLowerCase().includes(q);
+
+      if (!assetMatch && !idMatch && !buyerMatch && !sellerMatch && !counterpartyMatch) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 
   return (
     <div className={`w-full max-w-[1440px] mx-auto space-y-5 font-sans ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
@@ -561,6 +609,8 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
                   fetchOrders();
                   setRefreshCountdown(15);
                 }}
+                advertiserSearch={advertiserSearch}
+                onAdvertiserSearchChange={setAdvertiserSearch}
                 isDark={isDark}
               />
 
@@ -644,14 +694,97 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
 
           {/* MY ORDERS & ESCROW LIST */}
           {mainTab === 'my-orders' && (
-            <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[#181a20] border-[#2b313a]' : 'bg-white border-slate-200'}`}>
-              <div className="flex items-center justify-between mb-5">
+            <div className={`p-6 rounded-2xl border space-y-5 ${isDark ? 'bg-[#181a20] border-[#2b313a]' : 'bg-white border-slate-200 shadow-sm'}`}>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-black text-white">Your P2P Escrow Orders & Chat History</h3>
-                  <p className="text-xs text-slate-400">View active escrow trades, release audits, and re-enter live chat rooms.</p>
+                  <p className="text-xs text-slate-400">Filter, search, and manage all active escrow transactions and completed orders.</p>
+                </div>
+                {activeTrades.length > 0 && (
+                  <div className="text-xs font-mono text-slate-400">
+                    Showing <strong className="text-white">{filteredTrades.length}</strong> of {activeTrades.length} total orders
+                  </div>
+                )}
+              </div>
+
+              {/* Search Bar & Status Filtering Controls */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                {/* Search Bar */}
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type="text"
+                    value={tradesSearchQuery}
+                    onChange={(e) => setTradesSearchQuery(e.target.value)}
+                    placeholder="Search by asset (e.g. USDT, BTC), counterparty, or Order ID..."
+                    className="w-full bg-[#0b0e11] border border-[#2b313a] focus:border-[#fcd535] rounded-xl pl-10 pr-10 py-2.5 text-xs text-white placeholder-slate-500 font-mono outline-none transition-colors"
+                  />
+                  {tradesSearchQuery && (
+                    <button
+                      onClick={() => setTradesSearchQuery('')}
+                      className="absolute right-3 top-2.5 p-0.5 text-slate-400 hover:text-white cursor-pointer rounded"
+                      title="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Status Segmented Pills */}
+                <div className="flex items-center p-1 bg-[#0b0e11] rounded-xl border border-[#2b313a] shrink-0 overflow-x-auto scrollbar-none">
+                  <button
+                    onClick={() => setTradesStatusFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      tradesStatusFilter === 'all'
+                        ? 'bg-[#fcd535] text-[#0b0e11] shadow-sm font-black'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>All</span>
+                    <span className="text-[10px] opacity-75 font-mono">({activeTrades.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setTradesStatusFilter('pending')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      tradesStatusFilter === 'pending'
+                        ? 'bg-amber-400 text-[#0b0e11] shadow-sm font-black'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Pending</span>
+                    <span className={`text-[10px] font-mono px-1 rounded ${pendingTradesCount > 0 ? 'bg-amber-500/20 text-amber-300' : 'opacity-75'}`}>
+                      {pendingTradesCount}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setTradesStatusFilter('completed')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      tradesStatusFilter === 'completed'
+                        ? 'bg-[#0ecb81] text-[#0b0e11] shadow-sm font-black'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Completed</span>
+                    <span className="text-[10px] opacity-75 font-mono">({completedTradesCount})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setTradesStatusFilter('cancelled')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      tradesStatusFilter === 'cancelled'
+                        ? 'bg-[#f6465d] text-white shadow-sm font-black'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Cancelled</span>
+                    <span className="text-[10px] opacity-75 font-mono">({cancelledTradesCount})</span>
+                  </button>
                 </div>
               </div>
 
+              {/* Order List Rendering */}
               {activeTrades.length === 0 ? (
                 <div className="py-12 text-center space-y-3">
                   <ShieldCheck className="w-10 h-10 text-slate-600 mx-auto" />
@@ -666,17 +799,41 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
                     Go To Order Book
                   </button>
                 </div>
+              ) : filteredTrades.length === 0 ? (
+                <div className="py-12 text-center space-y-3">
+                  <Search className="w-8 h-8 text-slate-600 mx-auto" />
+                  <div className="text-sm font-bold text-slate-300">No matching orders found</div>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    {tradesSearchQuery 
+                      ? `No orders matching "${tradesSearchQuery}" with status: ${tradesStatusFilter.toUpperCase()}.`
+                      : `You currently have no ${tradesStatusFilter} orders.`}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setTradesSearchQuery('');
+                      setTradesStatusFilter('all');
+                    }}
+                    className="px-4 py-1.5 text-xs text-[#fcd535] bg-yellow-400/10 border border-yellow-400/30 rounded-lg hover:bg-yellow-400/20 font-bold transition-colors cursor-pointer"
+                  >
+                    Reset Filters
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-3">
-                  {activeTrades.map(trade => {
+                  {filteredTrades.map(trade => {
                     const isBuyer = effectiveUser && trade.buyer_id === effectiveUser.id;
+                    const counterparty = isBuyer ? trade.seller_id : trade.buyer_id;
+                    const formattedCounterparty = counterparty.startsWith('system_merchant_') 
+                      ? counterparty.replace('system_merchant_', '').replace(/_/g, ' ').toUpperCase() 
+                      : counterparty.substring(0, 10);
+
                     return (
                       <div
                         key={trade.id}
                         className="p-4 rounded-xl bg-[#0b0e11] border border-[#2b313a] hover:border-slate-600 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                       >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className={`text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded ${
                               isBuyer ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                             }`}>
@@ -688,9 +845,17 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
                             <span className="text-xs text-slate-400 font-mono">
                               ≈ ${(trade.amount * trade.price).toFixed(2)} USD
                             </span>
+                            <span className="text-[11px] font-mono text-slate-400 bg-[#181a20] px-2 py-0.5 rounded border border-[#2b313a]">
+                              Rate: {trade.price} / {trade.coin}
+                            </span>
                           </div>
-                          <div className="text-[11px] font-mono text-slate-400">
-                            Order ID: #{trade.id.substring(0, 10)} · {new Date(trade.created_at).toLocaleDateString()}
+
+                          <div className="text-[11px] font-mono text-slate-400 flex items-center gap-3 flex-wrap">
+                            <span>Order ID: <strong className="text-slate-300">#{trade.id.substring(0, 10)}</strong></span>
+                            <span>·</span>
+                            <span>Counterparty: <strong className="text-[#fcd535]">{formattedCounterparty}</strong></span>
+                            <span>·</span>
+                            <span>{new Date(trade.created_at).toLocaleString()}</span>
                           </div>
                         </div>
 
@@ -702,9 +867,11 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
                                 ? 'bg-yellow-500/10 text-[#fcd535] border border-yellow-500/20'
                                 : trade.status === 'open'
                                   ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                  : 'bg-slate-800 text-slate-400'
+                                  : trade.status === 'disputed'
+                                    ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                           }`}>
-                            {trade.status.toUpperCase()}
+                            {trade.status === 'open' ? 'PENDING PAYMENT' : trade.status.toUpperCase()}
                           </span>
 
                           {trade.status === 'open' && (
@@ -719,7 +886,7 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
 
                           <button
                             onClick={() => refreshCurrentTrade(trade.id)}
-                            className="px-4 py-2 bg-[#fcd535] hover:bg-yellow-300 text-[#0b0e11] font-black text-xs rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-1.5"
+                            className="px-4 py-2 bg-[#fcd535] hover:bg-yellow-300 text-[#0b0e11] font-black text-xs rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-1.5 shrink-0"
                           >
                             <MessageSquare className="w-3.5 h-3.5" />
                             <span>Enter Live Chat Room</span>

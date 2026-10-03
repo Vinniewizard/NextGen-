@@ -1,0 +1,6 @@
+{
+  "name": "MariTech Binary Options & Banking Platform",
+  "description": "A high-performance binary options and synthetic indices trading simulation platform featuring digital contracts, tick feeds, real-time ledgers, and intelligent AI companion analytical overlays.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

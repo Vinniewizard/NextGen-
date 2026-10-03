@@ -410,13 +410,26 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
     return true;
   }).sort((a, b) => {
     if (sortBy === 'price') {
-      return tradeDirection === 'buy' ? a.price - b.price : b.price - a.price;
+      const priceDiff = tradeDirection === 'buy' ? a.price - b.price : b.price - a.price;
+      if (Math.abs(priceDiff) > 0.0001) return priceDiff;
+      // Secondary tie-breaker: completion rate
+      const compDiff = (b.completion_rate || 99) - (a.completion_rate || 99);
+      if (Math.abs(compDiff) > 0.01) return compDiff;
+      // Tertiary tie-breaker: order count
+      const ordersDiff = (b.orders_count || 0) - (a.orders_count || 0);
+      if (ordersDiff !== 0) return ordersDiff;
+      // Quaternary tie-breaker: newest ad
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     }
     if (sortBy === 'completion') {
-      return (b.completion_rate || 99) - (a.completion_rate || 99);
+      const compDiff = (b.completion_rate || 99) - (a.completion_rate || 99);
+      if (Math.abs(compDiff) > 0.01) return compDiff;
+      return tradeDirection === 'buy' ? a.price - b.price : b.price - a.price;
     }
     if (sortBy === 'orders') {
-      return (b.orders_count || 0) - (a.orders_count || 0);
+      const ordersDiff = (b.orders_count || 0) - (a.orders_count || 0);
+      if (ordersDiff !== 0) return ordersDiff;
+      return tradeDirection === 'buy' ? a.price - b.price : b.price - a.price;
     }
     return 0;
   });

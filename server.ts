@@ -2981,14 +2981,23 @@ Active technical indicator values: ${indicatorsString}.`}`;
       const now = new Date().toISOString();
       const fiatSymbol = order.fiat_currency || 'USD';
       const fiatTotal = (tradeAmount * tradePrice).toFixed(2);
-      const initialMessage = JSON.stringify([
+      const initialMsgs = [
         {
           id: crypto.randomUUID(),
           sender: 'system',
-          text: `Trade initiated. Seller's ${tradeAmount} ${coin} is held safely in 100% Escrow Vault. Buyer, please transfer ${fiatTotal} ${fiatSymbol} via ${order.paymentMethod || 'Bank Transfer'}. Once sent, click 'Transferred, Notify Seller'.`,
+          text: `⚡ 100% Escrow Protected: Seller's ${tradeAmount} ${coin} is safely locked in the escrow vault. Buyer, please transfer ${fiatTotal} ${fiatSymbol} via ${order.paymentMethod || 'Bank Transfer'}. Once paid and marked, this trade will not expire and escrow remains locked until released.`,
           timestamp: now
         }
-      ]);
+      ];
+      if (order.terms) {
+        initialMsgs.push({
+          id: crypto.randomUUID(),
+          sender: 'merchant',
+          text: `Merchant Note: ${order.terms}`,
+          timestamp: now
+        });
+      }
+      const initialMessage = JSON.stringify(initialMsgs);
       
       if (db.prepare) {
         await db.prepare("INSERT INTO p2p_trades (id, order_id, buyer_id, seller_id, amount, price, coin, status, chat_messages, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)")

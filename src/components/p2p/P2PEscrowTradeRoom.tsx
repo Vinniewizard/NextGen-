@@ -55,23 +55,31 @@ export default function P2PEscrowTradeRoom({
   const isUserBuyer = currentUser && trade.buyer_id === currentUser.id;
   const isUserSeller = currentUser && trade.seller_id === currentUser.id;
 
-  // Live Escrow Countdown
+  // Live Escrow Countdown for Unpaid Orders (Strict Binance Rules)
   useEffect(() => {
-    const timer = setInterval(() => {
+    // When order is marked as Paid, it NEVER expires or auto-cancels
+    if (trade.status !== 'open') {
+      setTimeLeft(trade.status === 'paid' ? 'Protected' : trade.status);
+      return;
+    }
+
+    const updateTimer = () => {
       const created = new Date(trade.created_at).getTime();
       const expires = created + 15 * 60 * 1000;
       const remaining = expires - Date.now();
       if (remaining <= 0) {
         setTimeLeft('Expired');
-        clearInterval(timer);
       } else {
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
         setTimeLeft(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
       }
-    }, 1000);
+    };
+
+    updateTimer();
+    const timer = setInterval(updateTimer, 1000);
     return () => clearInterval(timer);
-  }, [trade.created_at]);
+  }, [trade.created_at, trade.status]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -168,8 +176,15 @@ export default function P2PEscrowTradeRoom({
           </div>
         )}
         {trade.status === 'paid' && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-[#fcd535] font-mono text-xs font-bold">
-            <span>Awaiting Seller Release</span>
+          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-bold shadow-sm">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span>Paid · Escrow Protected (Awaiting Release)</span>
+          </div>
+        )}
+        {trade.status === 'disputed' && (
+          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 font-mono text-xs font-bold">
+            <ShieldAlert className="w-4 h-4" />
+            <span>Appeal Active · Arbitration in Progress</span>
           </div>
         )}
         {trade.status === 'completed' && (

@@ -5361,7 +5361,11 @@ Active technical indicator values: ${indicatorsString}.`}`;
   });
 
   // Serve static files / Vite middleware handles HMR
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(process.cwd(), 'dist');
+  const indexHtmlPath = path.join(distPath, 'index.html');
+  const hasDist = await fs.access(indexHtmlPath).then(() => true).catch(() => false);
+
+  if (process.env.NODE_ENV !== 'production' || !hasDist) {
     try {
       console.log('Starting Vite server...');
       const vite = await createViteServer({
@@ -5369,16 +5373,15 @@ Active technical indicator values: ${indicatorsString}.`}`;
         appType: 'spa',
       });
       app.use(vite.middlewares);
-      console.log('Vite middleware mounted for local dev server.');
+      console.log('Vite middleware mounted for server.');
     } catch (viteError: any) {
       console.error('Failed to create Vite server:', viteError);
       process.exit(1);
     }
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(indexHtmlPath);
     });
   }
 

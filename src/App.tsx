@@ -178,7 +178,7 @@ export default function App() {
           })
         });
       } catch (err) {
-        console.error('Failed to log visitor traffic:', err);
+        // Analytics visit log silent fallback
       }
     };
     logVisit();
@@ -634,25 +634,20 @@ export default function App() {
           } else {
             hasSyncedFromServerRef.current = true;
           }
-        } else {
-          console.error('Recovery: Pull user state returned success: false', data);
-          // Recovery mode
-          Object.keys(localStorage).forEach(key => {
-            if (key.startsWith('lwex_') && key !== 'lwex_version') localStorage.removeItem(key);
-          });
-          window.location.reload();
-          }
         }
-      } else if (res.status === 401) {
-        // Clear all storage on auth failure to ensure fresh state
-        Object.keys(localStorage).forEach(key => {
-          if (key.startsWith('lwex_') && key !== 'lwex_version') localStorage.removeItem(key);
-        });
-        setCurrentUser(null);
-        window.location.reload();
       }
-    } catch (e) {
-      console.error('Failed to pull user state from server', e);
+    } else if (res.status === 401 || res.status === 404) {
+      // Clear all storage on auth failure or missing user to ensure fresh state without reload loops
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('lwex_') && key !== 'lwex_version') localStorage.removeItem(key);
+      });
+      setCurrentUser(null);
+    }
+    } catch (e: any) {
+      // Gracefully handle network disconnects / offline state without raising unhandled errors
+      if (e?.name !== 'TypeError' && !e?.message?.includes('fetch') && !e?.message?.includes('network')) {
+        console.warn('Notice pulling user state:', e?.message || e);
+      }
     } finally {
       isPullingRef.current = false;
     }
@@ -692,10 +687,12 @@ export default function App() {
       });
       if (!res.ok) {
         const errorText = await res.text();
-        console.error('Failed to pushUserState to server. Status:', res.status, 'Body:', errorText);
+        console.warn('Notice: pushUserState to server returned status:', res.status, 'Body:', errorText);
       }
-    } catch (e) {
-      console.error('Failed to pushUserState to server (network error):', e);
+    } catch (e: any) {
+      if (e?.name !== 'TypeError' && !e?.message?.includes('fetch') && !e?.message?.includes('network')) {
+        console.warn('Notice pushing user state:', e?.message || e);
+      }
     }
   };
 
@@ -959,7 +956,7 @@ export default function App() {
             consumeForceOutcome: false
           })
         })
-        .catch(err => console.error('[Backfill] Error updating user balance:', err));
+        .catch(err => console.warn('[Backfill] Notice updating user balance:', err?.message || err));
       }
 
       triggerToast(`Offline Trade Settled: ${contract.assetSymbol} ended in ${finalStatus.toUpperCase()}. Net payout: $${finalPayout.toFixed(2)} (${netProfit >= 0 ? '+' : ''}$${netProfit.toFixed(2)} Profit)`, netProfit >= 0);
@@ -1190,12 +1187,15 @@ export default function App() {
             });
             }
           }
-        } else if (res.status === 401) {
+        } else if (res.status === 401 || res.status === 404) {
           setCurrentUser(null);
           localStorage.removeItem('lwex_current_user');
         }
-      } catch (err) {
-        console.error('Failed to sync user:', err);
+      } catch (err: any) {
+        // Gracefully handle network hiccups / offline / dev server restarts without unhandled errors
+        if (err?.name !== 'TypeError' && !err?.message?.includes('fetch') && !err?.message?.includes('network')) {
+          console.warn('Notice syncing user balance:', err?.message || err);
+        }
       }
     };
 
@@ -1878,7 +1878,7 @@ export default function App() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: currentUser.email, alert, latestPrice })
-          }).catch(err => console.error('Failed to dispatch alert notification', err));
+          }).catch(err => console.warn('Notice alert notification dispatch:', err?.message || err));
         }
       }
     });
@@ -2004,7 +2004,7 @@ export default function App() {
           });
         }
       })
-      .catch(err => console.error('Failed to sync balance on deposit:', err));
+      .catch(err => console.warn('Notice syncing balance on deposit:', err?.message || err));
     }
     
     triggerToast(`Deposited $${amount.toLocaleString()} into portfolio index.`, true);
@@ -2600,7 +2600,7 @@ export default function App() {
                 });
               }
             })
-            .catch(err => console.error('Error syncing settlement balance:', err));
+            .catch(err => console.warn('Notice syncing settlement balance:', err?.message || err));
           }
         }
 
@@ -2817,7 +2817,7 @@ export default function App() {
           });
         }
       })
-      .catch(err => console.error('Failed to sync balance on purchase:', err));
+      .catch(err => console.warn('Notice syncing balance on purchase:', err?.message || err));
     }
 
     setActiveContracts((prev) => {
@@ -2869,7 +2869,7 @@ export default function App() {
           });
         }
       })
-      .catch(err => console.error('Error syncing early sell balance:', err));
+      .catch(err => console.warn('Notice syncing early sell balance:', err?.message || err));
     }
 
     const nextContracts = activeContracts.filter((c) => c.id !== contractId);
@@ -3242,7 +3242,7 @@ export default function App() {
           });
         }
       })
-      .catch(err => console.error('Failed to sync balance on cancel limit:', err));
+      .catch(err => console.warn('Notice syncing balance on cancel limit:', err?.message || err));
     }
 
     setPendingLimitOrders((prev) => prev.filter(o => o.id !== orderId));

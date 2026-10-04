@@ -858,11 +858,17 @@ export default function App() {
         }
       }
 
-      const calculatedSellPrice = Math.max(0, contract.stake + currentProfit);
+      const isWinningCurrently = currentProfit > 0;
+      let calculatedSellPrice = contract.stake;
+      if (isWinningCurrently) {
+        calculatedSellPrice = contract.stake + (contract.payout - contract.stake) * 0.7;
+      } else {
+        calculatedSellPrice = Math.max(contract.stake * 0.1, contract.stake * 0.5);
+      }
 
       let isStopLossTriggered = false;
       let isTakeProfitTriggered = false;
-      let earlyExitRefund = 0;
+      let earlyExitRefund = calculatedSellPrice;
 
       if (contract.stopLoss && contract.stopLoss > 0) {
         const slPercent = contract.stopLoss;
@@ -873,12 +879,11 @@ export default function App() {
             : 0;
         } else {
           priceAgainstPct = stepPrice > contract.entryPrice 
-            ? ((stepPrice - contract.entryPrice) / contract.entryPrice) * 150 
+            ? ((stepPrice - contract.entryPrice) / contract.entryPrice) * 100 
             : 0;
         }
 
-        const stakeLossPct = ((contract.stake - calculatedSellPrice) / contract.stake) * 100;
-        if (priceAgainstPct >= slPercent || stakeLossPct >= slPercent) {
+        if (priceAgainstPct >= slPercent) {
           isStopLossTriggered = true;
           earlyExitRefund = calculatedSellPrice;
         }
@@ -900,11 +905,6 @@ export default function App() {
           if (stepPrice <= contract.takeProfitPrice) isTakeProfitTriggered = true;
         }
         if (isTakeProfitTriggered) earlyExitRefund = calculatedSellPrice;
-      }
-
-      if (calculatedSellPrice <= 0) {
-        isStopLossTriggered = true;
-        earlyExitRefund = 0;
       }
 
       return {
@@ -2195,9 +2195,12 @@ export default function App() {
           const nextPrice = nextPricesMap[contract.assetId];
           if (nextPrice === undefined || contract.status !== 'active') return contract;
 
-          let ticksPassed = contract.ticksPassed + 1;
+          let ticksPassed = contract.ticksPassed;
+          if (shouldGenPrice) {
+            ticksPassed += 1;
+          }
           if (contract.durationUnit !== 'ticks') {
-            ticksPassed = Math.floor((now - contract.entryTime) / 1000);
+            ticksPassed = Math.max(0, Math.floor((now - contract.entryTime) / 1000));
           }
           
           let totalDurationInSeconds = contract.duration;
@@ -2208,7 +2211,7 @@ export default function App() {
           } else if (contract.durationUnit === 'minutes') {
             totalDurationInSeconds = contract.duration * 60;
           } else if (contract.durationUnit === 'ticks') {
-            totalDurationInSeconds = contract.duration; // 1 tick = 1 second
+            totalDurationInSeconds = contract.duration; // 1 tick = 1 price tick
           }
 
           let isExpired = false;
@@ -2309,16 +2312,25 @@ export default function App() {
           // Compute early sell configurations for Stop Loss check
           let ratioRemaining = 0;
           if (contract.durationUnit === 'ticks') {
-            ratioRemaining = Math.max(0, (totalDurationInSeconds - ticksPassed) / totalDurationInSeconds);
+            ratioRemaining = Math.max(0, (totalDurationInSeconds - ticksPassed) / Math.max(1, totalDurationInSeconds));
           } else {
-            ratioRemaining = Math.max(0, (contract.expiryTime - now) / (contract.expiryTime - contract.entryTime));
+            const totalDurationMs = Math.max(1000, contract.expiryTime - contract.entryTime);
+            ratioRemaining = Math.max(0, (contract.expiryTime - now) / totalDurationMs);
           }
-          const calculatedSellPrice = Math.max(0, contract.stake + currentProfit);
+          
+          const isWinningCurrently = currentProfit > 0;
+          let calculatedSellPrice = contract.stake;
+          if (isWinningCurrently) {
+            calculatedSellPrice = contract.stake + (contract.payout - contract.stake) * Math.max(0.2, (1 - ratioRemaining * 0.4));
+          } else {
+            calculatedSellPrice = Math.max(contract.stake * 0.1, contract.stake * Math.max(0.15, ratioRemaining * 0.75));
+          }
 
-          // Evaluate percentage-based Stop Loss
+          // Evaluate percentage-based Stop Loss (only when explicitly configured)
           let isStopLossTriggered = false;
           let isTakeProfitTriggered = false;
-          let earlyExitRefund = 0;
+          let earlyExitRefund = calculatedSellPrice;
+
           if (contract.stopLoss && contract.stopLoss > 0) {
             const slPercent = contract.stopLoss;
             let priceAgainstPct = 0;
@@ -2333,8 +2345,7 @@ export default function App() {
                 : 0;
             }
 
-            const stakeLossPct = ((contract.stake - calculatedSellPrice) / contract.stake) * 100;
-            if (priceAgainstPct >= slPercent || stakeLossPct >= slPercent) {
+            if (priceAgainstPct >= slPercent) {
               isStopLossTriggered = true;
               earlyExitRefund = calculatedSellPrice;
             }
@@ -2361,18 +2372,12 @@ export default function App() {
           }
 
           // Auto Take-Profit / Auto Cashout rule
-          if (!isStopLossTriggered && !isTakeProfitTriggered && autoCashoutPercent > 0 && calculatedSellPrice > contract.stake) {
+          if (!isStopLossTriggered && !isTakeProfitTriggered && autoCashoutPercent > 0 && isWinningCurrently && calculatedSellPrice > contract.stake) {
             const currentProfitPct = ((calculatedSellPrice - contract.stake) / contract.stake) * 100;
             if (currentProfitPct >= autoCashoutPercent) {
               isTakeProfitTriggered = true;
               earlyExitRefund = calculatedSellPrice;
             }
-          }
-
-          // Auto Stop Out (Margin Call): Automatically close if equity <= 0
-          if (calculatedSellPrice <= 0) {
-            isStopLossTriggered = true;
-            earlyExitRefund = 0;
           }
 
           const isPrematureExit = (contract.type === 'touch-no-touch' && status !== 'active') || isStopLossTriggered || isTakeProfitTriggered;
@@ -4135,6 +4140,7 @@ export default function App() {
                 currentUser={currentUser} 
                 isDark={theme === 'dark'} 
                 onBalanceUpdate={refreshUserBalance}
+                onOpenAuth={() => handleTriggerAuth('login')}
               />
             </div>
           )}

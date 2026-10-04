@@ -54,7 +54,7 @@ export default function InviteModal({ isOpen, onClose, currentUser, theme, trigg
           <div className={`w-full max-w-sm rounded-2xl border p-6 shadow-2xl relative ${isDark ? 'bg-zinc-900 border-zinc-700 text-white' : 'bg-white border-gray-200'}`}>
             <h3 className="text-lg font-black mb-4">How to Earn Your $20 Bonus</h3>
             <p className={`text-sm mb-6 ${isDark ? 'text-zinc-300' : 'text-gray-600'}`}>
-              Invite 10 friends to register successfully on LWEX using your referral link. Once 10 users have completed their registration, an additional <span className="font-bold text-emerald-500">$20 bonus</span> will be credited to your real balance automatically!
+              Invite 10 friends to register successfully on Knex Trading using your referral link. Once 10 users have completed their registration, an additional <span className="font-bold text-emerald-500">$20 bonus</span> will be credited to your real balance automatically!
             </p>
             <button 
               onClick={() => setIsBonusInfoOpen(false)}

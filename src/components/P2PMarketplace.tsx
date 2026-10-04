@@ -17,9 +17,10 @@ interface P2PMarketplaceProps {
   currentUser: any;
   isDark: boolean;
   onBalanceUpdate?: () => void;
+  onOpenAuth?: () => void;
 }
 
-export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }: P2PMarketplaceProps) {
+export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate, onOpenAuth }: P2PMarketplaceProps) {
   // Navigation tabs: 'marketplace' | 'express' | 'my-orders' | 'user-center'
   const [mainTab, setMainTab] = useState<'marketplace' | 'express' | 'my-orders' | 'user-center'>('marketplace');
 
@@ -197,6 +198,11 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
 
   // Trade Initiation (Locking Escrow & DIRECTING to Room / Chat Room)
   const handleInitiateTrade = async (order: P2POrder, cryptoAmount: number) => {
+    if (!currentUser) {
+      if (onOpenAuth) onOpenAuth();
+      triggerToast('Authentication required: Please log in or create an account to initiate a P2P Escrow trade. Binary Demo trading is available in Guest mode.', false);
+      return;
+    }
     const user = getEffectiveUser();
     setIsSubmitting(true);
     try {
@@ -361,6 +367,11 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
 
   // Post New Merchant Ad
   const handleCreateAd = async (adData: any) => {
+    if (!currentUser) {
+      if (onOpenAuth) onOpenAuth();
+      triggerToast('Authentication required: Please log in to post P2P advertisements.', false);
+      return;
+    }
     const user = getEffectiveUser();
     setIsSubmitting(true);
     try {
@@ -574,9 +585,48 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
             activeTab={mainTab}
             onSelectTab={setMainTab}
             activeEscrowsCount={activeEscrowsCount}
-            onPostAdClick={() => setShowPostAdModal(true)}
+            onPostAdClick={() => {
+              if (!currentUser) {
+                if (onOpenAuth) onOpenAuth();
+                triggerToast('Authentication required: Please log in or create an account to post P2P advertisements.', false);
+                return;
+              }
+              setShowPostAdModal(true);
+            }}
             isDark={isDark}
           />
+
+          {/* Guest Mode Security Notice */}
+          {!currentUser && (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 md:p-5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-orange-500/15 border border-amber-500/30 text-slate-200 animate-fade-in shadow-md">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-yellow-500/20 text-yellow-400 flex items-center justify-center shrink-0 mt-0.5 border border-yellow-500/30 shadow-inner">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-sm text-yellow-400">P2P Escrow Trading Requires Login</span>
+                    <span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-300 text-[10px] font-bold">
+                      Guest View
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
+                    To initiate P2P fiat trades, lock escrows, or post ads, please log in or create an account. You can freely practice Binary Options trading using your <strong className="text-white">$10,000 DEMO balance</strong> in Guest mode.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                {onOpenAuth && (
+                  <button
+                    onClick={onOpenAuth}
+                    className="px-5 py-2.5 bg-gradient-to-r from-[#fcd535] to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-yellow-500/20 transition-all cursor-pointer transform active:scale-95"
+                  >
+                    Log In / Register
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* 2. TAB CONTENT ROUTING */}
           {mainTab === 'marketplace' && (
@@ -660,14 +710,24 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
                       tradeDirection={tradeDirection}
                       isExpanded={expandedOrderId === order.id}
                       onToggleExpand={() => {
+                        if (!currentUser) {
+                          if (onOpenAuth) onOpenAuth();
+                          triggerToast('Please log in or register to trade on P2P Escrow. Binary Demo trading is active.', false);
+                          return;
+                        }
                         setExpandedOrderId(prev => prev === order.id ? null : order.id);
                       }}
                       onOpenModal={(ord) => {
+                        if (!currentUser) {
+                          if (onOpenAuth) onOpenAuth();
+                          triggerToast('Please log in or register to trade on P2P Escrow. Binary Demo trading is active.', false);
+                          return;
+                        }
                         setSelectedOrderForModal(ord);
                       }}
                       onInitiateTrade={handleInitiateTrade}
                       userBalance={userInfo.balance}
-                      currentUser={effectiveUser}
+                      currentUser={currentUser || effectiveUser}
                       isSubmitting={isSubmitting}
                       isDark={isDark}
                     />
@@ -683,7 +743,7 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate }:
           {mainTab === 'express' && (
             <P2PExpressTrade
               orders={orders}
-              currentUser={effectiveUser}
+              currentUser={currentUser}
               userBalance={userInfo.balance}
               onInitiateTrade={handleInitiateTrade}
               isSubmitting={isSubmitting}

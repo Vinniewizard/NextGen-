@@ -10,7 +10,7 @@ interface WalkthroughProps {
 const steps = [
   {
     target: 'body',
-    content: 'Welcome to the LWEX Terminal. The fastest institutional-grade trading platform. Let\'s begin your edge.',
+    content: 'Welcome to the Knex Trading Terminal. The fastest institutional-grade binary & P2P trading platform. Let\'s begin your edge.',
     placement: 'center' as const,
     disableBeacon: true,
   },

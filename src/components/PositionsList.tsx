@@ -242,7 +242,17 @@ export default function PositionsList({
                               <div className="flex justify-between text-[9px] text-gray-400 font-bold uppercase">
                                 <span>Elapsed Time</span>
                                 <span className="font-mono">
-                                  {contract.ticksPassed}s / {contract.durationUnit === 'minutes' ? contract.duration * 60 : contract.durationUnit === 'seconds' ? contract.duration : contract.duration}s
+                                  {isTickUnit
+                                    ? `${contract.ticksPassed} / ${contract.duration} Ticks`
+                                    : `${contract.ticksPassed}s / ${
+                                        contract.durationUnit === 'days'
+                                          ? contract.duration * 86400
+                                          : contract.durationUnit === 'hours'
+                                          ? contract.duration * 3600
+                                          : contract.durationUnit === 'minutes'
+                                          ? contract.duration * 60
+                                          : contract.duration
+                                      }s`}
                                 </span>
                               </div>
                               {isTickUnit ? (
@@ -260,7 +270,23 @@ export default function PositionsList({
                                 <div className={`w-full rounded-full h-1 ${isDark ? 'bg-zinc-800' : 'bg-gray-100'}`}>
                                   <div
                                     className={`${isDark ? 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]' : 'bg-black'} h-1 rounded-full transition-all duration-300 max-w-full`}
-                                    style={{ width: `${Math.min(100, Math.max(0, (contract.ticksPassed / (contract.durationUnit === 'minutes' ? contract.duration * 60 : contract.duration)) * 100))}%` }}
+                                    style={{
+                                      width: `${Math.min(
+                                        100,
+                                        Math.max(
+                                          0,
+                                          (contract.ticksPassed /
+                                            (contract.durationUnit === 'days'
+                                              ? contract.duration * 86400
+                                              : contract.durationUnit === 'hours'
+                                              ? contract.duration * 3600
+                                              : contract.durationUnit === 'minutes'
+                                              ? contract.duration * 60
+                                              : contract.duration)) *
+                                            100
+                                        )
+                                      )}%`,
+                                    }}
                                   />
                                 </div>
                               )}

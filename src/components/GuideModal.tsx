@@ -27,7 +27,7 @@ export default function GuideModal({ isOpen, onClose, triggerToast }: GuideModal
     setTimeout(() => {
       setFormSubmitted(false);
       setFormData({ email: '', phone: '' });
-      triggerToast("Application Received! The LWEX Education team will contact you shortly.", true);
+      triggerToast("Application Received! The Knex Trading Education team will contact you shortly.", true);
     }, 2500);
   };
 
@@ -42,7 +42,7 @@ export default function GuideModal({ isOpen, onClose, triggerToast }: GuideModal
               <BookOpen className="h-5 w-5 text-purple-400" />
             </div>
             <div>
-              <h2 className="text-lg font-bold tracking-tight font-sans">LWEX Academy</h2>
+              <h2 className="text-lg font-bold tracking-tight font-sans">Knex Academy</h2>
               <p className="text-[10px] text-gray-400 font-mono uppercase font-bold tracking-widest">Institutional Knowledge Base</p>
             </div>
           </div>

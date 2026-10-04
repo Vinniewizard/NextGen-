@@ -128,7 +128,7 @@ export default function Header({
             <span className={`text-[13px] md:text-base font-black tracking-normal leading-none font-sans ${
               isDark ? 'text-white' : 'text-slate-900'
             }`}>
-              LWEX <span className={isDark ? 'text-yellow-400 font-semibold' : 'text-yellow-600 font-semibold'}>exchange</span>
+              Knex <span className={isDark ? 'text-yellow-400 font-semibold' : 'text-yellow-600 font-semibold'}>Trading</span>
             </span>
           </div>
         </div>

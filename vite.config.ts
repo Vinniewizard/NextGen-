@@ -13,9 +13,9 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg'],
         manifest: {
-          name: 'LWEX Trading Platform',
-          short_name: 'LWEX',
-          description: 'Premium Binary Options & Trading Platform',
+          name: 'Knex Trading Platform',
+          short_name: 'Knex Trading',
+          description: 'Premium Binary Options, Synthetic Indices & P2P Trading Platform',
           theme_color: '#4f46e5',
           background_color: '#000000',
           display: 'standalone',

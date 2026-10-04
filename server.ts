@@ -2338,16 +2338,21 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/register', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const { email, password, fullName, phone, country, referredBy } = req.body;
+      const { email, password, fullName, phone, country, referredBy, rememberMe } = req.body;
       
       if (!email || !password) {
         return res.status(400).json({ success: false, message: 'Email and password are required.' });
       }
 
+      const normalizedEmail = email.trim().toLowerCase();
+      if (password.length < 6) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
+      }
+
       const db = getD1Database();
 
       // Check if email already registered
-      const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+      const existingUser = await db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').bind(normalizedEmail).first();
       if (existingUser) {
         return res.status(409).json({ success: false, message: 'Email already registered.' });
       }
@@ -2368,7 +2373,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
       await db.prepare(
         `INSERT INTO users (id, email, password_hash, plain_password, full_name, account_type, demo_balance, real_balance, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(userId, email, passwordHash, password, fullName || 'User', 'demo', 10000.0, 10.0, now, now).run();
+      ).bind(userId, normalizedEmail, passwordHash, password, fullName || 'User', 'demo', 10000.0, 10.0, now, now).run();
 
       // Apply registration bonus
       await db.prepare('UPDATE users SET registered_bonus_credited = 1, registered_bonus_amount = 10.0 WHERE id = ?')
@@ -2397,7 +2402,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
             }
 
             if (telegramConfig.botToken && telegramConfig.groupChatId) {
-              const guideText = `🔥 <b>MILESTONE UNLOCKED!</b> 🔥\n\nA member just reached 10 referrals!\n\n<b>📚 NEW MEMBER WELCOME GUIDE:</b>\n1. Sign up on our platform to get a $10k Practice Account.\n2. Access live AI signals from Wizard Bot.\n3. Make your first deposit to switch to REAL mode and withdraw earnings directly to M-Pesa.\n\n🔗 Let's grow together: https://lwex.onrender.com/`;
+              const guideText = `🔥 <b>MILESTONE UNLOCKED!</b> 🔥\n\nA member just reached 10 referrals!\n\n<b>📚 NEW MEMBER WELCOME GUIDE:</b>\n1. Sign up on Knex Trading to get a $10k Practice Account.\n2. Access live AI signals from Wizard Bot.\n3. Make your first deposit to switch to REAL mode and withdraw earnings directly to M-Pesa.\n\n🔗 Let's grow together: https://knex.onrender.com/`;
               
               fetch(`https://api.telegram.org/bot${telegramConfig.botToken}/sendMessage`, {
                 method: 'POST',
@@ -2424,7 +2429,8 @@ Active technical indicator values: ${indicatorsString}.`}`;
 
       const sessionToken = crypto.randomBytes(32).toString('hex');
       const sessionId = `sess-${crypto.randomBytes(8).toString('hex')}`;
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days validity
+      const sessionDuration = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+      const expiresAt = new Date(Date.now() + sessionDuration).toISOString();
 
       await db.prepare(
         `INSERT INTO user_sessions (session_id, user_id, token, created_at, expires_at)
@@ -2433,14 +2439,16 @@ Active technical indicator values: ${indicatorsString}.`}`;
 
       return res.json({
         success: true,
-        message: 'Registration successful!',
+        message: 'Registration successful! $10,000 Practice Balance + $10 Welcome Bonus loaded.',
         user: {
           id: userId,
-          email,
+          email: normalizedEmail,
           fullName: fullName || 'User',
           phone: phone || '',
           country: country || 'Kenya',
           balance: 10000.0,
+          demo_balance: 10000.0,
+          real_balance: 10.0,
           accountType: 'demo',
           forceOutcome: '',
           profitTarget: 0.00,
@@ -2459,25 +2467,32 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/login', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const { email, password } = req.body;
+      const { email, password, rememberMe } = req.body;
       
       if (!email || !password) {
         return res.status(400).json({ success: false, message: 'Email/Phone and password are required.' });
       }
 
+      const normalizedInput = email.trim().toLowerCase();
+
       const db = getD1Database();
       const user = await db.prepare(`
         SELECT u.* FROM users u 
         LEFT JOIN user_profiles up ON u.id = up.user_id 
-        WHERE u.email = ? OR up.phone = ?
-      `).bind(email, email).first();
+        WHERE LOWER(u.email) = ? OR up.phone = ?
+      `).bind(normalizedInput, email.trim()).first();
 
       if (!user) {
         return res.status(401).json({ success: false, message: 'Invalid email/phone or password.' });
       }
 
       const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-      if (passwordHash !== user.password_hash) {
+      const hashExpected = Buffer.from(user.password_hash || '', 'hex');
+      const hashActual = Buffer.from(passwordHash, 'hex');
+
+      const isMatch = hashExpected.length === hashActual.length && crypto.timingSafeEqual(hashExpected, hashActual);
+
+      if (!isMatch) {
         // Send notifications
         await sendSecurityAlert(user, 'email');
         await sendSecurityAlert(user, 'sms');
@@ -2489,7 +2504,8 @@ Active technical indicator values: ${indicatorsString}.`}`;
       const sessionToken = crypto.randomBytes(32).toString('hex');
       const sessionId = `sess-${crypto.randomBytes(8).toString('hex')}`;
       const now = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const sessionDuration = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+      const expiresAt = new Date(Date.now() + sessionDuration).toISOString();
 
       await db.prepare(
         `INSERT INTO user_sessions (session_id, user_id, token, created_at, expires_at)
@@ -2510,6 +2526,8 @@ Active technical indicator values: ${indicatorsString}.`}`;
           country: profile?.country || 'Kenya',
           verificationStatus: profile?.verification_status || 'unverified',
           balance: user.account_type === 'demo' ? user.demo_balance : user.real_balance,
+          demo_balance: user.demo_balance,
+          real_balance: user.real_balance,
           accountType: user.account_type,
           forceOutcome: user.force_outcome,
           profitTarget: user.profit_target,

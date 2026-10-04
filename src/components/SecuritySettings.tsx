@@ -66,7 +66,7 @@ export default function SecuritySettings({ currentUser, isDark, onUpdateUser }: 
     <div className="space-y-6">
       <div className={`p-4 rounded-xl border ${isDark ? 'bg-zinc-900/40 border-zinc-800' : 'bg-gray-50 border-gray-100'}`}>
         <h3 className="text-sm font-bold mb-3 flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500" /> Anti-Phishing Code</h3>
-        <p className="text-xs text-gray-500 mb-3">This code will appear in all official emails from LWEX.</p>
+        <p className="text-xs text-gray-500 mb-3">This code will appear in all official emails from Knex Trading.</p>
         <div className="flex gap-2">
           <input type="text" value={antiPhishingCode} onChange={(e) => setAntiPhishingCode(e.target.value)} className={`flex-1 p-2 rounded text-xs ${isDark ? 'bg-zinc-800' : 'bg-white'}`} placeholder="Enter unique phrase" />
           <button onClick={saveAntiPhishing} className="bg-indigo-600 text-white px-3 py-1 rounded text-xs font-bold">Save</button>

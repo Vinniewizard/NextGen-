@@ -240,7 +240,7 @@ export default function P2POrderRow({
                   Advertiser Terms & Instructions
                 </h4>
                 <div className="p-3.5 rounded-xl bg-[#0b0e11] border border-[#2b313a] text-xs text-slate-300 leading-relaxed font-sans whitespace-pre-line">
-                  {order.terms || '1. Strictly no third-party accounts.\n2. Your account name must match your LWEX KYC name.\n3. Automatic escrow release immediately once funds reflect.'}
+                  {order.terms || '1. Strictly no third-party accounts.\n2. Your account name must match your Knex Trading KYC name.\n3. Automatic escrow release immediately once funds reflect.'}
                 </div>
               </div>
 

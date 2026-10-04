@@ -1630,7 +1630,7 @@ export default function App() {
     paybillEnabled: true,
     btcEnabled: true,
     minDeposit: 1,
-    minWithdrawal: 10,
+    minWithdrawal: 15,
     cashoutMode: 'enabled',
     payoutRate: 95.5,
     minStake: 1,
@@ -4367,7 +4367,16 @@ export default function App() {
           {/* VIEW 2: FINANCE & CASHIER (Pure isolated view) */}
           {activeTabView === 'finance' && (
             <div className="w-full animate-fade-in">
-              <FinanceDashboard currentUser={currentUser} isDark={theme === 'dark'} />
+              <FinanceDashboard 
+                currentUser={currentUser} 
+                isDark={theme === 'dark'} 
+                gameSettings={gameSettings}
+                onBalanceUpdate={refreshUserBalance}
+                onOpenCashierModal={(tab) => {
+                  handleOpenCashierWithTab(tab || 'deposit');
+                }}
+                onSwitchView={(view) => handleSwitchView(view as any)}
+              />
             </div>
           )}
 

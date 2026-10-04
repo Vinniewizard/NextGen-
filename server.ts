@@ -1735,35 +1735,35 @@ Active technical indicator values: ${indicatorsString}.`}`;
     }
   });
 
-  // API Route: NOWPayments Withdrawal Dispatch
+  // API Route: NOWPayments Withdrawal Dispatch & Fiat/M-Pesa Withdrawal
   app.post('/api/cashier/dispatch-withdrawal', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const { targetAddress, userId } = req.body;
-      const coin = (req.body.coin || 'btc').toLowerCase();
+      const { targetAddress, userId, paymentMethod: rawPaymentMethod, note } = req.body;
+      const coin = (req.body.coin || 'USD').toUpperCase();
       const amount = parseAmount(req.body.amount);
+      const paymentMethod = String(rawPaymentMethod || 'mpesa').toLowerCase();
 
       const ledger = await loadCashierLedger();
-      const btcEnabled = ledger.gameSettings?.btcEnabled !== false;
-      const minWithdrawal = ledger.gameSettings?.minWithdrawal ?? 10.00;
-
-      if (!btcEnabled) {
-        return res.status(400).json({ success: false, message: 'BTC/Cryptocurrency withdrawals are currently disabled by the administrator.' });
-      }
+      const minWithdrawal = ledger.gameSettings?.minWithdrawal ?? 15.00;
 
       if (amount < minWithdrawal) {
-        return res.status(400).json({ success: false, message: `Minimum withdrawal amount is $${minWithdrawal} USD.` });
+        return res.status(400).json({ success: false, message: `Minimum withdrawal amount is $${minWithdrawal.toFixed(2)} USD.` });
       }
 
       const address = String(targetAddress || '').trim();
       if (!address) {
-        return res.status(400).json({ success: false, message: 'Withdrawal address is required.' });
+        return res.status(400).json({ success: false, message: 'Withdrawal destination (phone number, wallet address, or account details) is required.' });
       }
 
       const db = getD1Database();
-      const user = await db.prepare('SELECT id, real_balance, verified_bonus_credited, first_deposit_bonus_credited FROM users WHERE id = ? OR email = ?').bind(userId, userId).first();
+      const user = await db.prepare('SELECT id, real_balance, verified_bonus_credited, first_deposit_bonus_credited, registered_bonus_credited FROM users WHERE id = ? OR email = ?').bind(userId, userId).first();
       if (!user) {
         return res.status(404).json({ success: false, message: 'User account not found.' });
+      }
+
+      if (user.real_balance < amount) {
+        return res.status(400).json({ success: false, message: `Insufficient real balance. You have $${user.real_balance.toFixed(2)} available, requested $${amount.toFixed(2)}.` });
       }
 
       // Safe bonus withdrawal condition checkpoint
@@ -1808,71 +1808,146 @@ Active technical indicator values: ${indicatorsString}.`}`;
         }
       }
 
-      if (user.real_balance < amount) {
-        return res.status(400).json({ success: false, message: 'Insufficient real balance to withdraw.' });
-      }
-
-      if (!withdrawalsEnabled) {
-        // Fall back gracefully to a seamless mock withdrawal, simulating approval
-        console.log(`Live withdrawals disabled. Simulating withdrawal authorization of $${amount} to address ${address} for user ${userId}`);
-        const payoutId = `po-sim-${Date.now()}`;
-        const now = new Date().toISOString();
-
-        // Write simulated transaction to ledger
-        await db.prepare(
-          `INSERT INTO withdrawals (withdraw_order_id, amount, coin, network, address, user_id, requested_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).bind(payoutId, amount, coin.toUpperCase(), 'CRYPTO', address, user.id, now).run();
-
-        // Reduce user balance
-        await db.prepare('UPDATE users SET real_balance = real_balance - ?, updated_at = ? WHERE id = ?').bind(amount, now, user.id).run();
-
-        return res.json({
-          success: true,
-          message: `Withdrawal of $${amount.toLocaleString()} was successfully simulated and debited from your account!`,
-          payoutId,
-          isSandbox: true
-        });
-      }
-
-      // NOWPayments Payout API usually requires a specialized call or a separate setup.
-      // For now, we'll implement it as a payout request with a sandbox fallback.
-      let payoutId: string;
-      try {
-        const payout = await nowPaymentsRequest('POST', '/payout', {
-          withdrawals: [
-            {
-              address,
-              currency: coin,
-              amount: amount,
-              ipn_callback_url: process.env.IPN_CALLBACK_URL
-            }
-          ]
-        });
-        payoutId = payout.id || `po-${Date.now()}`;
-      } catch (payoutError: any) {
-        console.warn('NOWPayments Payout API call failed. Falling back to sandbox withdrawal:', payoutError.message);
-        payoutId = `po-sandbox-${Date.now()}`;
-      }
-
+      const payoutId = `wd-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
       const now = new Date().toISOString();
+      const cleanMethod = paymentMethod.includes('mpesa') || paymentMethod.includes('paybill') ? 'M-Pesa' : 
+                         paymentMethod.includes('bank') ? 'Bank Wire' : 
+                         paymentMethod.includes('chipper') ? 'Chipper Cash' :
+                         paymentMethod.includes('revolut') ? 'Revolut' : 'Crypto';
 
-      // Insert into withdrawals table
+      // Insert real withdrawal record into database
       await db.prepare(
-        `INSERT INTO withdrawals (withdraw_order_id, amount, coin, network, address, user_id, requested_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(payoutId, amount, coin.toUpperCase(), 'CRYPTO', address, user.id, now).run();
-      
-      // Withdraw from user balance immediately in SQL database
-      await db.prepare('UPDATE users SET real_balance = real_balance - ?, updated_at = ? WHERE id = ?').bind(amount, now, user.id).run();
-      
+        `INSERT INTO withdrawals (withdraw_order_id, amount, coin, network, address, user_id, requested_at, status, payment_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(payoutId, amount, coin, cleanMethod, address, user.id, now, 'pending', cleanMethod).run();
+
+      // Immediately deduct from user real balance
+      await db.prepare('UPDATE users SET real_balance = real_balance - ?, updated_at = ? WHERE id = ?')
+        .bind(amount, now, user.id)
+        .run();
+
+      const updatedUser = await db.prepare('SELECT real_balance FROM users WHERE id = ?').bind(user.id).first();
+      const newBalance = updatedUser ? updatedUser.real_balance : (user.real_balance - amount);
+
+      // Broadcast updated real balance across all active devices via WebSocket
+      broadcastToUser(user.id, {
+        type: 'BALANCE_UPDATED',
+        mode: 'real',
+        balance: newBalance,
+        timestamp: Date.now()
+      });
+
       return res.json({ 
         success: true, 
-        message: 'Withdrawal submitted to NOWPayments.',
-        payoutId
+        message: `Withdrawal request of $${amount.toFixed(2)} USD submitted via ${cleanMethod}. Your balance has been updated and the request is pending settlement.`,
+        payoutId,
+        newBalance
       });
     } catch (error: any) {
-      console.error('NOWPayments Payout Error:', error);
+      console.error('Withdrawal Dispatch Error:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // API Route: Get Active / Pending Deposit session
+  app.get('/api/cashier/active-deposit', async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    try {
+      const { userId } = req.query;
+      if (!userId) return res.status(400).json({ success: false, message: 'User ID is required.' });
+
+      const db = getD1Database();
+      const user = await db.prepare('SELECT id FROM users WHERE id = ? OR email = ?').bind(userId, userId).first();
+      const finalUserId = user ? user.id : String(userId);
+
+      const pending = await db.prepare(
+        "SELECT * FROM pending_deposits WHERE user_id = ? AND status IN ('initiated', 'pending') ORDER BY created_at DESC LIMIT 1"
+      ).bind(finalUserId).first();
+
+      return res.json({ success: true, activeDeposit: pending || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // API Route: Initiate Deposit Order (Paybill / M-Pesa / Crypto / Bank)
+  app.post('/api/cashier/initiate-deposit', async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    try {
+      const { userId, amount, paymentMethod, coin, message } = req.body;
+      const parsedAmount = parseAmount(amount);
+
+      const ledger = await loadCashierLedger();
+      const minDeposit = ledger.gameSettings?.minDeposit ?? 1.00;
+      if (parsedAmount < minDeposit) {
+        return res.status(400).json({ success: false, message: `Minimum deposit amount is $${minDeposit.toFixed(2)} USD.` });
+      }
+
+      const db = getD1Database();
+      const user = await db.prepare('SELECT id FROM users WHERE id = ? OR email = ?').bind(userId, userId).first();
+      const finalUserId = user ? user.id : String(userId);
+
+      // Cancel any prior unconfirmed 'initiated' deposits for this user
+      await db.prepare(
+        "UPDATE pending_deposits SET status = 'cancelled' WHERE user_id = ? AND status = 'initiated'"
+      ).bind(finalUserId).run();
+
+      const depositId = `dep-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const now = new Date().toISOString();
+      const cleanMethod = paymentMethod || 'paybill';
+
+      await db.prepare(
+        `INSERT INTO pending_deposits (id, user_id, amount, receipt_path, message, status, created_at, payment_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(depositId, finalUserId, parsedAmount, null, message || null, 'initiated', now, cleanMethod).run();
+
+      const shortRef = depositId.split('-').slice(1).join('').toUpperCase().slice(0, 8);
+
+      return res.json({
+        success: true,
+        deposit: {
+          id: depositId,
+          userId: finalUserId,
+          amount: parsedAmount,
+          kesAmount: Math.round(parsedAmount * 132),
+          paybill: '247247',
+          accountNo: `KNEX-${shortRef}`,
+          referenceCode: shortRef,
+          status: 'initiated',
+          paymentMethod: cleanMethod,
+          coin: coin || 'USD',
+          createdAt: now
+        }
+      });
+    } catch (error: any) {
+      console.error('Initiate deposit error:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // API Route: Cancel Active Deposit
+  app.post('/api/cashier/cancel-deposit', async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    try {
+      const { userId, depositId } = req.body;
+      if (!userId) return res.status(400).json({ success: false, message: 'User ID is required.' });
+
+      const db = getD1Database();
+      const user = await db.prepare('SELECT id FROM users WHERE id = ? OR email = ?').bind(userId, userId).first();
+      const finalUserId = user ? user.id : String(userId);
+
+      if (depositId) {
+        await db.prepare(
+          "UPDATE pending_deposits SET status = 'cancelled' WHERE id = ? AND user_id = ?"
+        ).bind(depositId, finalUserId).run();
+      } else {
+        await db.prepare(
+          "UPDATE pending_deposits SET status = 'cancelled' WHERE user_id = ? AND status IN ('initiated', 'pending')"
+        ).bind(finalUserId).run();
+      }
+
+      return res.json({ success: true, message: 'Deposit order cancelled successfully. You may now initiate a fresh deposit.' });
+    } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     }
   });
@@ -5267,7 +5342,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
 
       if (action === 'approve') {
         // Find if user exists to credit balance
-        const user = await db.prepare("SELECT id FROM users WHERE id = ?").bind(deposit.user_id).first();
+        const user = await db.prepare("SELECT id, real_balance FROM users WHERE id = ?").bind(deposit.user_id).first();
         if (!user) {
           return res.status(404).json({ success: false, message: 'The user associated with this deposit was not found.' });
         }
@@ -5283,13 +5358,32 @@ Active technical indicator values: ${indicatorsString}.`}`;
         await db.prepare(
           `INSERT INTO credited_deposits (tx_hash, amount, coin, network, user_id, credited_at)
            VALUES (?, ?, ?, ?, ?, ?)`
-        ).bind(txHash, deposit.amount, 'USD', 'MPESA', user.id, now).run();
+        ).bind(txHash, deposit.amount, 'USD', deposit.payment_method?.toUpperCase() || 'MPESA', user.id, now).run();
 
         // Apply first deposit match bonus if qualified
         await applyFirstDepositBonusIfEligible(db, user.id, deposit.amount, now);
+
+        const updatedUser = await db.prepare("SELECT real_balance FROM users WHERE id = ?").bind(user.id).first();
+        const updatedBal = updatedUser ? updatedUser.real_balance : (user.real_balance + deposit.amount);
+
+        // Real-time broadcast to user's connected devices
+        broadcastToUser(user.id, {
+          type: 'BALANCE_UPDATED',
+          mode: 'real',
+          balance: updatedBal,
+          depositApproved: true,
+          amount: deposit.amount,
+          timestamp: Date.now()
+        });
       } else {
         // Mark as declined
         await db.prepare("UPDATE pending_deposits SET status = 'declined' WHERE id = ?").bind(depositId).run();
+        
+        broadcastToUser(deposit.user_id, {
+          type: 'DEPOSIT_DECLINED',
+          depositId,
+          timestamp: Date.now()
+        });
       }
 
       return res.json({ success: true, message: `Deposit ${action}d successfully.` });
@@ -5326,14 +5420,33 @@ Active technical indicator values: ${indicatorsString}.`}`;
       const now = new Date().toISOString();
 
       if (action === 'approve') {
-        // Just mark as paid/approved
+        // Mark as paid/approved
         await db.prepare("UPDATE withdrawals SET status = 'paid' WHERE withdraw_order_id = ?").bind(withdrawalId).run();
+
+        broadcastToUser(withdrawal.user_id, {
+          type: 'WITHDRAWAL_PAID',
+          withdrawalId,
+          amount: withdrawal.amount,
+          timestamp: Date.now()
+        });
       } else {
         // Decline withdrawal: mark as declined and Refund the amount to the user's real balance
         await db.prepare("UPDATE withdrawals SET status = 'declined' WHERE withdraw_order_id = ?").bind(withdrawalId).run();
         await db.prepare("UPDATE users SET real_balance = real_balance + ?, updated_at = ? WHERE id = ?")
           .bind(withdrawal.amount, now, withdrawal.user_id)
           .run();
+
+        const updatedUser = await db.prepare("SELECT real_balance FROM users WHERE id = ?").bind(withdrawal.user_id).first();
+        const updatedBal = updatedUser ? updatedUser.real_balance : 0;
+
+        broadcastToUser(withdrawal.user_id, {
+          type: 'BALANCE_UPDATED',
+          mode: 'real',
+          balance: updatedBal,
+          withdrawalDeclined: true,
+          amount: withdrawal.amount,
+          timestamp: Date.now()
+        });
       }
 
       return res.json({ success: true, message: `Withdrawal has been successfully ${action === 'approve' ? 'paid' : 'declined and refunded'}.` });

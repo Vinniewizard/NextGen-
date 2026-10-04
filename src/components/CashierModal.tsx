@@ -133,7 +133,7 @@ export default function CashierModal({
   // Synchronize limits without clearing the generated deposit Address
   useEffect(() => {
     const minD = gameSettings?.minDeposit ?? 1;
-    const minW = gameSettings?.minWithdrawal ?? 10;
+    const minW = gameSettings?.minWithdrawal ?? 15;
     
     if (activeTab === 'deposit') {
       if (amount < minD) setAmount(minD);
@@ -141,6 +141,89 @@ export default function CashierModal({
       if (amount < minW) setAmount(minW);
     }
   }, [activeTab, gameSettings?.minDeposit, gameSettings?.minWithdrawal]);
+
+  const [activeDepositOrder, setActiveDepositOrder] = useState<any>(null);
+
+  // Load active deposit order from server on open
+  useEffect(() => {
+    if (isOpen) {
+      const userId = currentUser?.id || currentUser?.email || account.id;
+      if (userId) {
+        fetch(`/api/cashier/active-deposit?userId=${userId}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.success && data.activeDeposit) {
+              setActiveDepositOrder(data.activeDeposit);
+              if (data.activeDeposit.amount) setAmount(data.activeDeposit.amount);
+              if (data.activeDeposit.payment_method?.includes('nowpayments') || data.activeDeposit.payment_method?.includes('crypto')) {
+                setPaymentMethod('nowpayments');
+              } else {
+                setPaymentMethod('paybill');
+              }
+            }
+          })
+          .catch(e => console.warn('Failed to fetch active deposit order:', e));
+      }
+    }
+  }, [isOpen, currentUser, account?.id]);
+
+  const handleCancelActiveDeposit = async () => {
+    const userId = currentUser?.id || currentUser?.email || account.id;
+    if (!userId) return;
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/cashier/cancel-deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, depositId: activeDepositOrder?.id })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActiveDepositOrder(null);
+        setDepositAddress(null);
+        setReceiptFile(null);
+        setMpesaMessage('');
+        localStorage.removeItem(`lwex_pending_deposit_${userId}`);
+        setSuccessMsg('Deposit order cancelled. You may now start a new deposit.');
+      }
+    } catch (e: any) {
+      setApiError(e.message || 'Failed to cancel deposit order.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleInitiatePaybillDeposit = async () => {
+    const minD = gameSettings?.minDeposit ?? 1;
+    if (amount < minD) {
+      setApiError(`The minimum deposit is $${minD} USD.`);
+      return;
+    }
+    setIsProcessing(true);
+    setApiError('');
+    const userId = currentUser?.id || currentUser?.email || account.id;
+    try {
+      const res = await fetch('/api/cashier/initiate-deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          amount,
+          paymentMethod: 'paybill',
+          coin: 'USD'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to initiate deposit order.');
+      }
+      setActiveDepositOrder(data.deposit);
+    } catch (e: any) {
+      setApiError(e.message || 'Failed to initiate Paybill deposit order.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const handleAmountChange = (val: number) => {
     setAmount(val);
@@ -310,7 +393,7 @@ export default function CashierModal({
     if (amount <= 0) return;
 
     const minD = gameSettings?.minDeposit ?? 1;
-    const minW = gameSettings?.minWithdrawal ?? 10;
+    const minW = gameSettings?.minWithdrawal ?? 15;
 
     if (activeTab === 'deposit' && amount < minD) {
       setApiError(`The minimum deposit amount is $${minD} USD.`);
@@ -335,13 +418,13 @@ export default function CashierModal({
       const userId = currentUser?.id || currentUser?.email || account.id;
 
       if (paymentMethod === 'paybill') {
-        if (activeTab === 'deposit' && !receiptFile) {
-          throw new Error('Please upload your M-Pesa receipt for verification.');
-        }
-
         if (activeTab === 'deposit') {
+          if (!activeDepositOrder) {
+            await handleInitiatePaybillDeposit();
+            return;
+          }
+
           const formData = new FormData();
-          formData.append('receipt', receiptFile!);
           formData.append('userId', userId);
           formData.append('amount', amount.toString());
           formData.append('paymentMethod', 'paybill');
@@ -349,7 +432,7 @@ export default function CashierModal({
           if (mpesaMessage) formData.append('message', mpesaMessage);
 
           if (!receiptFile && !mpesaMessage) {
-            throw new Error('Please provide either an M-Pesa receipt image or the transaction message.');
+            throw new Error('Please provide either the M-Pesa confirmation message or upload a screenshot receipt.');
           }
 
           const response = await fetch('/api/cashier/upload-receipt', {
@@ -364,10 +447,36 @@ export default function CashierModal({
 
           setReceiptFile(null);
           setMpesaMessage('');
-          setSuccessMsg('Deposit details submitted! LWEX admin will verify and credit your account within 30 minutes.');
+          setActiveDepositOrder(null);
+          setSuccessMsg('Deposit receipt submitted! Admin will verify your payment and credit your balance.');
           return;
         } else {
-          throw new Error('M-Pesa withdrawals are currently processed manually. Please contact support with your M-Pesa details.');
+          // M-Pesa Withdrawal
+          if (!targetAddress.trim()) {
+            throw new Error('Please enter your receiving M-Pesa phone number.');
+          }
+
+          const response = await fetch('/api/cashier/dispatch-withdrawal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetAddress: targetAddress.trim(),
+              amount,
+              paymentMethod: 'mpesa',
+              coin: 'USD',
+              userId
+            })
+          });
+
+          const data = await readApiResponse(response);
+          if (!response.ok || !data.success) {
+            throw new Error(data.message || 'M-Pesa withdrawal request failed.');
+          }
+
+          onWithdraw(amount);
+          setTargetAddress('');
+          setSuccessMsg(data.message || `Withdrawal request of $${amount.toFixed(2)} USD submitted to M-Pesa ${targetAddress}.`);
+          return;
         }
       }
 
@@ -752,7 +861,7 @@ export default function CashierModal({
                   USD Amount requested
                 </label>
                 <span className="text-[9px] font-bold text-yellow-500 uppercase tracking-widest bg-yellow-500/10 px-1.5 py-0.5 rounded">
-                  Min: ${activeTab === 'deposit' ? (gameSettings?.minDeposit ?? 1) : (gameSettings?.minWithdrawal ?? 10)} USD
+                   Min: ${activeTab === 'deposit' ? (gameSettings?.minDeposit ?? 1) : (gameSettings?.minWithdrawal ?? 15)} USD
                 </span>
               </div>
               <div className={`flex rounded-md border items-center px-3 focus-within:border-yellow-500 min-h-12 sm:min-h-11 transition-colors ${
@@ -762,7 +871,7 @@ export default function CashierModal({
                 <input
                   id="cashier-amount-input"
                   type="number"
-                  min={activeTab === 'deposit' ? (gameSettings?.minDeposit ?? 1) : (gameSettings?.minWithdrawal ?? 10)}
+                  min={activeTab === 'deposit' ? (gameSettings?.minDeposit ?? 1) : (gameSettings?.minWithdrawal ?? 15)}
                   max={50000}
                   disabled={activeTab === 'deposit' && depositAddress !== null}
                   value={amount === 0 ? '' : amount}
@@ -772,7 +881,7 @@ export default function CashierModal({
                   }}
                   onBlur={() => {
                     const minD = gameSettings?.minDeposit ?? 1;
-                    const minW = gameSettings?.minWithdrawal ?? 10;
+                    const minW = gameSettings?.minWithdrawal ?? 15;
                     const minLimit = activeTab === 'deposit' ? minD : minW;
                     if (amount < minLimit) {
                       setAmount(minLimit);
@@ -783,7 +892,7 @@ export default function CashierModal({
                 />
               </div>
               <div className="flex justify-between items-center text-[9px] sm:text-[10px] text-slate-400 font-bold">
-                <span>{activeTab === 'deposit' ? `Minimum deposit is $${gameSettings?.minDeposit ?? 1} USD` : `Minimum withdrawal is $${gameSettings?.minWithdrawal ?? 10} USD`}</span>
+                <span>{activeTab === 'deposit' ? `Minimum deposit is $${gameSettings?.minDeposit ?? 1} USD` : `Minimum withdrawal is $${gameSettings?.minWithdrawal ?? 15} USD`}</span>
                 {activeTab === 'deposit' && depositAddress !== null && (
                   <span className="text-yellow-500 animate-pulse font-mono">Amount locked for instructions</span>
                 )}
@@ -800,7 +909,7 @@ export default function CashierModal({
                 )}
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 sm:gap-2">
                   {(() => {
-                    const minLimit = activeTab === 'deposit' ? (gameSettings?.minDeposit ?? 1) : (gameSettings?.minWithdrawal ?? 10);
+                    const minLimit = activeTab === 'deposit' ? (gameSettings?.minDeposit ?? 1) : (gameSettings?.minWithdrawal ?? 15);
                     const rawPresets = activeTab === 'deposit' ? [50, 100, 500] : [20, 50, 250, 1000];
                     // Snap presets dynamically to at least the minimum, and keep them unique
                     const uniquePresets = Array.from(new Set(rawPresets.map(preset => Math.max(minLimit, preset))));
@@ -1230,41 +1339,66 @@ export default function CashierModal({
             )}
 
             {paymentMethod === 'paybill' && activeTab === 'deposit' && (
-              <div className="rounded-lg bg-slate-900 border border-slate-800 p-4 space-y-4">
+              <div className="rounded-xl bg-slate-900 border border-slate-800 p-4 sm:p-5 space-y-4">
                 <div className="flex items-center justify-between gap-2 border-b border-slate-800/60 pb-2">
-                  <span className="text-[10px] font-black text-green-500 uppercase tracking-widest">
-                    M-Pesa Lipa Na Paybill
+                  <span className="text-[10px] font-black text-green-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                    Lipa Na M-Pesa Paybill Instructions
                   </span>
-                  <DollarSign className="h-3.5 w-3.5 text-green-500" />
+                  <DollarSign className="h-4 w-4 text-green-500" />
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4">
+                {/* Active Order Breakdown */}
+                <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-slate-950 border border-slate-800">
                   <div>
-                    <p className="text-[9px] text-slate-400 font-bold uppercase">Business Number</p>
-                    <p className="text-sm font-mono font-bold text-white">542542</p>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase">Paybill Number</p>
+                    <p className="text-sm font-mono font-black text-green-400">247247</p>
                   </div>
                   <div>
                     <p className="text-[9px] text-slate-400 font-bold uppercase">Account Number</p>
-                    <p className="text-sm font-mono font-bold text-white">00204484326150</p>
+                    <p className="text-sm font-mono font-black text-white">
+                      {activeDepositOrder?.accountNo || `KNEX-${(currentUser?.id || '7789').slice(-6).toUpperCase()}`}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase">USD Amount</p>
+                    <p className="text-xs font-mono font-black text-white">${amount} USD</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase">Approx KES Amount</p>
+                    <p className="text-xs font-mono font-black text-yellow-400">KES {(amount * 132).toLocaleString()}</p>
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                {activeDepositOrder ? (
+                  <div className="p-2.5 rounded bg-green-500/10 border border-green-500/20 text-[10px] text-green-300 font-bold flex items-center justify-between">
+                    <span>Order Active: Awaiting your payment confirmation</span>
+                    <button
+                      type="button"
+                      onClick={handleCancelActiveDeposit}
+                      className="px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded text-[9px] font-black uppercase cursor-pointer"
+                    >
+                      Cancel Order
+                    </button>
+                  </div>
+                ) : null}
+
+                <div className="space-y-1.5">
                   <label htmlFor="mpesa-msg-area" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                    Option A: Paste M-Pesa Confirmation Message
+                    Step 2: Paste M-Pesa Transaction Code / Message
                   </label>
                   <textarea
                     id="mpesa-msg-area"
                     value={mpesaMessage}
                     onChange={(e) => setMpesaMessage(e.target.value)}
-                    placeholder="Paste the message here (e.g. QXJ7... Confirmed. Ksh...)"
-                    className="w-full h-20 bg-slate-950 border border-slate-800 rounded p-2 text-[10px] text-white font-mono focus:border-green-500 outline-none"
+                    placeholder="e.g. QXJ789ABCD Confirmed. Ksh 6,600 sent to 247247..."
+                    className="w-full h-18 bg-slate-950 border border-slate-800 rounded p-2 text-[10px] text-white font-mono focus:border-green-500 outline-none"
                   />
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <label htmlFor="mpesa-screenshot-file" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                    Option B: Upload Payment Receipt (Screenshot)
+                    Or Upload Payment Screenshot (Receipt)
                   </label>
                   <input
                     id="mpesa-screenshot-file"
@@ -1276,10 +1410,8 @@ export default function CashierModal({
                   {receiptFile && <p className="text-[9px] text-green-500 font-bold">Selected: {receiptFile.name}</p>}
                 </div>
 
-                <div className="p-3 bg-green-500/5 rounded border border-green-500/20">
-                  <p className="text-[10px] text-slate-300 font-medium leading-relaxed">
-                    Instructions: Pay <span className="text-green-500 font-bold">${amount}</span> to the Paybill above, take a screenshot of the confirmation message, and upload it here.
-                  </p>
+                <div className="p-3 bg-green-500/5 rounded border border-green-500/20 text-[10px] text-slate-300 font-medium leading-relaxed">
+                  Instructions: Go to M-Pesa &gt; Lipa na M-Pesa &gt; Paybill &gt; Enter <strong>247247</strong> &gt; Account <strong>{activeDepositOrder?.accountNo || `KNEX-${(currentUser?.id || '7789').slice(-6).toUpperCase()}`}</strong> &gt; Pay <strong>KES {(amount * 132).toLocaleString()}</strong> &gt; Submit code above.
                 </div>
               </div>
             )}

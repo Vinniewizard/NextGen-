@@ -126,7 +126,7 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
     paybillEnabled: true,
     btcEnabled: true,
     minDeposit: 1,
-    minWithdrawal: 10,
+    minWithdrawal: 15,
     minStake: 1,
     maxStake: 5000,
     cashoutMode: 'enabled',
@@ -580,7 +580,7 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
           paybillEnabled: true,
           btcEnabled: true,
           minDeposit: 1.00,
-          minWithdrawal: 10.00,
+          minWithdrawal: 15.00,
           ...gameData.settings, 
           realWinRate: gameData.settings.realWinRate ?? 30 
         } : { 
@@ -590,7 +590,7 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
           paybillEnabled: true,
           btcEnabled: true,
           minDeposit: 1.00,
-          minWithdrawal: 10.00
+          minWithdrawal: 15.00
         });
         
         // Fetch Telegram configuration and logs
@@ -2125,12 +2125,12 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
                             />
                           </div>
 
-                          <div>
+                            <div>
                             <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Min Withdrawal (USD)</label>
                             <input
                               type="number"
                               step="0.01"
-                              value={gameSettings.minWithdrawal !== undefined ? gameSettings.minWithdrawal : 10.00}
+                              value={gameSettings.minWithdrawal !== undefined ? gameSettings.minWithdrawal : 15.00}
                               onChange={(e) => setGameSettings({ ...gameSettings, minWithdrawal: parseFloat(e.target.value) || 0.00 })}
                               className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-xs font-bold text-white font-mono outline-none focus:border-yellow-500 transition-all"
                             />

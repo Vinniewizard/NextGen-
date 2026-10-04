@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -10,8 +11,28 @@ import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
 import { authenticator } from '@otplib/preset-default';
 import QRCode from 'qrcode';
+import { WebSocketServer, WebSocket } from 'ws';
 
 dotenv.config({ path: ['.env.local', '.env', '.env.example'] });
+
+// Multi-device WebSocket management
+const userSockets = new Map<string, Set<WebSocket>>();
+
+export function broadcastToUser(userId: string, data: any, exceptWs?: WebSocket) {
+  if (!userId) return;
+  const sockets = userSockets.get(userId);
+  if (!sockets || sockets.size === 0) return;
+  const payload = JSON.stringify(data);
+  for (const client of sockets) {
+    if (client !== exceptWs && client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch (err) {
+        console.warn('[WS] Error broadcasting to client:', err);
+      }
+    }
+  }
+}
 
 const cashierLedgerPath = path.join(process.cwd(), 'cashier-ledger.json');
 const uploadDir = path.join(process.cwd(), 'uploads');
@@ -3459,6 +3480,16 @@ Active technical indicator values: ${indicatorsString}.`}`;
       // Check if user qualifies for the 200% first deposit promo bonus
       await checkAndApply200PercentBonus(db, userId, now);
 
+      // Real-time synchronization: Broadcast state update to all active devices of this user
+      broadcastToUser(userId, {
+        type: 'USER_STATE_SYNC',
+        mode,
+        activeContracts: activeContracts || [],
+        tradeHistory: tradeHistory || [],
+        priceAlerts: priceAlerts || [],
+        timestamp: Date.now()
+      });
+
       return res.json({ success: true });
     } catch (err: any) {
       console.error('[POST USER STATE ERROR]', err.message);
@@ -3499,6 +3530,15 @@ Active technical indicator values: ${indicatorsString}.`}`;
       let forceOutcomeCleared = false;
       // Admin requested: Let the settings set by the admin remain running until they reset again.
       // So we do not automatically clear force_outcome upon trade settlement.
+
+      // Real-time synchronization: Broadcast balance update to all active devices of this user
+      broadcastToUser(userId, {
+        type: 'BALANCE_UPDATED',
+        balance: nextBalance,
+        isDemo: !!isDemo,
+        mode: isDemo ? 'demo' : 'real',
+        timestamp: Date.now()
+      });
 
       return res.json({ 
         success: true, 
@@ -5403,8 +5443,100 @@ Active technical indicator values: ${indicatorsString}.`}`;
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running at http://localhost:${PORT}`);
+  const httpServer = http.createServer(app);
+
+  // Initialize WebSocket server on /ws path
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  wss.on('connection', (ws: WebSocket) => {
+    let boundUserId: string | null = null;
+
+    ws.on('message', async (messageData) => {
+      try {
+        const msg = JSON.parse(messageData.toString());
+        if (msg.type === 'auth') {
+          const { userId } = msg;
+          if (userId) {
+            boundUserId = String(userId);
+            if (!userSockets.has(boundUserId)) {
+              userSockets.set(boundUserId, new Set());
+            }
+            userSockets.get(boundUserId)!.add(ws);
+            ws.send(JSON.stringify({ type: 'authenticated', userId: boundUserId, serverTime: Date.now() }));
+          }
+        } else if (msg.type === 'trade_created') {
+          const { userId, mode, contract, balance } = msg;
+          if (userId && contract) {
+            broadcastToUser(String(userId), {
+              type: 'TRADE_CREATED',
+              mode: mode || 'demo',
+              contract,
+              balance,
+              timestamp: Date.now()
+            }, ws);
+          }
+        } else if (msg.type === 'trade_cashed_out') {
+          const { userId, mode, contractId, settlementItem, balance, payout, netProfit } = msg;
+          if (userId && contractId) {
+            broadcastToUser(String(userId), {
+              type: 'TRADE_CASHED_OUT',
+              mode: mode || 'demo',
+              contractId,
+              settlementItem,
+              balance,
+              payout,
+              netProfit,
+              timestamp: Date.now()
+            }, ws);
+          }
+        } else if (msg.type === 'trade_settled') {
+          const { userId, mode, contractId, settlementItem, balance } = msg;
+          if (userId && contractId) {
+            broadcastToUser(String(userId), {
+              type: 'TRADE_SETTLED',
+              mode: mode || 'demo',
+              contractId,
+              settlementItem,
+              balance,
+              timestamp: Date.now()
+            }, ws);
+          }
+        } else if (msg.type === 'balance_updated') {
+          const { userId, balance, mode } = msg;
+          if (userId && balance !== undefined) {
+            broadcastToUser(String(userId), {
+              type: 'BALANCE_UPDATED',
+              balance,
+              mode: mode || 'demo',
+              timestamp: Date.now()
+            }, ws);
+          }
+        } else if (msg.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong', serverTime: Date.now() }));
+        }
+      } catch (e: any) {
+        console.warn('[WS message error]', e?.message || e);
+      }
+    });
+
+    ws.on('close', () => {
+      if (boundUserId && userSockets.has(boundUserId)) {
+        const set = userSockets.get(boundUserId)!;
+        set.delete(ws);
+        if (set.size === 0) userSockets.delete(boundUserId);
+      }
+    });
+
+    ws.on('error', (err) => {
+      console.warn('[WS socket error]', err?.message || err);
+      if (boundUserId && userSockets.has(boundUserId)) {
+        userSockets.get(boundUserId)!.delete(ws);
+      }
+    });
+  });
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running at http://localhost:${PORT} with WebSocket sync on /ws`);
   });
 }
 

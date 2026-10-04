@@ -523,15 +523,185 @@ export default function App() {
   const getServerTime = () => Date.now() + serverTimeDriftRef.current;
 
   const isPullingRef = useRef<boolean>(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const sendWsMessage = (msg: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify(msg));
+      } catch (err) {
+        console.warn('[WS Client] Error sending message:', err);
+      }
+    }
+  };
+
+  // Real-time WebSocket connection for instant multi-device trade and cashout sync
+  useEffect(() => {
+    if (!currentUser?.id) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      return;
+    }
+
+    let isUnmounted = false;
+    let reconnectTimeout: any = null;
+    let pingInterval: any = null;
+
+    const connectWebSocket = () => {
+      if (isUnmounted) return;
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({
+            type: 'auth',
+            userId: currentUser.id,
+            mode: accountRef.current.mode
+          }));
+
+          clearInterval(pingInterval);
+          pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            }
+          }, 20000);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'TRADE_CREATED') {
+              const { contract, balance, mode } = data;
+              if (contract && contract.id) {
+                if (settledContractIdsRef.current.has(contract.id)) return;
+                
+                setActiveContracts((prev) => {
+                  if (prev.some(c => c.id === contract.id)) return prev;
+                  triggerToast(`Trade Active on Another Device: ${contract.direction.toUpperCase()} on ${contract.assetSymbol}`, true);
+                  return [...prev, contract];
+                });
+
+                if (typeof balance === 'number') {
+                  setAccount(prev => ({ ...prev, balance }));
+                  if (mode === 'real') {
+                    setRealAccountBalance(balance);
+                  }
+                }
+              }
+            } else if (data.type === 'TRADE_CASHED_OUT') {
+              const { contractId, settlementItem, balance, mode, payout } = data;
+              if (contractId) {
+                settledContractIdsRef.current.add(contractId);
+                setActiveContracts(prev => prev.filter(c => c.id !== contractId));
+                if (settlementItem) {
+                  setTradeHistory(prev => {
+                    if (prev.some(h => h.id === settlementItem.id)) return prev;
+                    return [settlementItem, ...prev];
+                  });
+                }
+                if (typeof balance === 'number') {
+                  setAccount(prev => ({ ...prev, balance }));
+                  if (mode === 'real') {
+                    setRealAccountBalance(balance);
+                  }
+                }
+                triggerToast(`Trade cashed out on another device (+$${(payout || 0).toFixed(2)})`, true);
+              }
+            } else if (data.type === 'TRADE_SETTLED') {
+              const { contractId, settlementItem, balance, mode } = data;
+              if (contractId) {
+                settledContractIdsRef.current.add(contractId);
+                setActiveContracts(prev => prev.filter(c => c.id !== contractId));
+                if (settlementItem) {
+                  setTradeHistory(prev => {
+                    if (prev.some(h => h.id === settlementItem.id)) return prev;
+                    return [settlementItem, ...prev];
+                  });
+                }
+                if (typeof balance === 'number') {
+                  setAccount(prev => ({ ...prev, balance }));
+                  if (mode === 'real') {
+                    setRealAccountBalance(balance);
+                  }
+                }
+              }
+            } else if (data.type === 'BALANCE_UPDATED') {
+              const { balance, mode } = data;
+              if (typeof balance === 'number') {
+                if (accountRef.current.mode === mode) {
+                  setAccount(prev => ({ ...prev, balance }));
+                }
+                if (mode === 'real') {
+                  setRealAccountBalance(balance);
+                } else if (mode === 'demo' && accountRef.current.mode === 'demo') {
+                  setDemoAccountBalance(balance);
+                }
+              }
+            } else if (data.type === 'USER_STATE_SYNC') {
+              if (data.activeContracts && Array.isArray(data.activeContracts)) {
+                setActiveContracts(prev => {
+                  const map = new Map(prev.map(c => [c.id, c]));
+                  data.activeContracts.forEach((sc: any) => {
+                    if (!map.has(sc.id) && !settledContractIdsRef.current.has(sc.id)) {
+                      map.set(sc.id, sc);
+                    }
+                  });
+                  return Array.from(map.values());
+                });
+              }
+              if (data.tradeHistory && Array.isArray(data.tradeHistory)) {
+                setTradeHistory(prev => {
+                  const existing = new Set(prev.map(h => h.id));
+                  const newItems = data.tradeHistory.filter((h: any) => !existing.has(h.id));
+                  return newItems.length > 0 ? [...newItems, ...prev] : prev;
+                });
+              }
+            }
+          } catch (err) {
+            console.warn('[WS Client parse error]', err);
+          }
+        };
+
+        ws.onclose = () => {
+          clearInterval(pingInterval);
+          if (!isUnmounted) {
+            reconnectTimeout = setTimeout(connectWebSocket, 3000);
+          }
+        };
+
+        ws.onerror = () => {
+          ws.close();
+        };
+      } catch (e) {
+        console.warn('[WS Connection Error]', e);
+        if (!isUnmounted) {
+          reconnectTimeout = setTimeout(connectWebSocket, 3000);
+        }
+      }
+    };
+
+    connectWebSocket();
+
+    return () => {
+      isUnmounted = true;
+      clearInterval(pingInterval);
+      clearTimeout(reconnectTimeout);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [currentUser?.id]);
 
   const pullUserState = async () => {
     const userVal = currentUserRef.current;
     if (!userVal) {
       hasSyncedFromServerRef.current = true;
-      return;
-    }
-    // Prevent overriding local state if we recently made changes
-    if (Date.now() - localMutationTimeRef.current < 3000) {
       return;
     }
     if (isPullingRef.current) return;
@@ -2618,8 +2788,23 @@ export default function App() {
                     newHistoryMap.set(item.id, item);
                 }
             });
-            return Array.from(newHistoryMap.values());
+            const mergedHistory = Array.from(newHistoryMap.values());
+            pushUserState(updated, mergedHistory, priceAlertsRef.current);
+            return mergedHistory;
           });
+
+          if (currentUser) {
+            newHistoryItems.forEach(item => {
+              sendWsMessage({
+                type: 'trade_settled',
+                userId: currentUser.id,
+                mode: accountRef.current.mode,
+                contractId: item.id,
+                settlementItem: item,
+                balance: accountRef.current.balance + balanceDelta
+              });
+            });
+          }
         }
 
         return updated;
@@ -2828,6 +3013,18 @@ export default function App() {
     setActiveContracts((prev) => {
       const nextContracts = [...prev, newContract];
       pushUserState(nextContracts, tradeHistory, priceAlerts);
+      
+      // Emit real-time trade event to other devices immediately
+      if (currentUser) {
+        sendWsMessage({
+          type: 'trade_created',
+          userId: currentUser.id,
+          mode: account.mode,
+          contract: newContract,
+          balance: account.balance - config.stake
+        });
+      }
+      
       return nextContracts;
     });
 
@@ -2842,8 +3039,9 @@ export default function App() {
     if (!contract || contract.status !== 'active') return;
 
     const refund = contract.sellPrice || contract.stake * 0.5;
+    const nextBalance = account.balance + refund;
 
-    setAccount((prevAcc) => ({ ...prevAcc, balance: prevAcc.balance + refund }));
+    setAccount((prevAcc) => ({ ...prevAcc, balance: nextBalance }));
     if (account.mode === 'real') {
       setRealAccountBalance((prev) => Math.max(0, prev + refund));
     }
@@ -2895,9 +3093,24 @@ export default function App() {
 
     setTradeHistory((prevHistory) => {
       const alreadyHas = prevHistory.some((h) => h.id === contract.id);
-      const nextHistory = alreadyHas ? prevHistory : [...prevHistory, newHistoryItem];
+      const nextHistory = alreadyHas ? prevHistory : [newHistoryItem, ...prevHistory];
+      pushUserState(nextContracts, nextHistory, priceAlerts);
       return nextHistory;
     });
+
+    // Broadcast instant cashout event to all other connected devices
+    if (currentUser) {
+      sendWsMessage({
+        type: 'trade_cashed_out',
+        userId: currentUser.id,
+        mode: account.mode,
+        contractId,
+        settlementItem: newHistoryItem,
+        balance: nextBalance,
+        payout: refund,
+        netProfit: refund - contract.stake
+      });
+    }
 
     setActiveContracts(nextContracts);
     triggerToast(`Contract liquidated early for $${(refund ?? 0).toFixed(2)} refund.`, true);

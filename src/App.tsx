@@ -3137,6 +3137,12 @@ export default function App() {
 
   const handleSwitchView = (view: 'trade' | 'history' | 'stats' | 'finance' | 'p2p') => {
     setActiveTabView(view);
+    if (view === 'p2p') {
+      if (account.mode !== 'real') {
+        handleSwitchAccount('real');
+        triggerToast("Switched to Real Account for P2P Escrow Trading.", true);
+      }
+    }
     if (view === 'history') setPositionsTab('statements');
     else if (view === 'stats') setPositionsTab('stats');
     else setPositionsTab('positions');

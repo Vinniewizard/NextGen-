@@ -111,7 +111,7 @@ export default function P2PNavigation({
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <span>Orders</span>
+              <span>Orders & History</span>
               {activeEscrowsCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[10px] font-black animate-pulse">
                   {activeEscrowsCount}

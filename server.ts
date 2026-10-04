@@ -101,6 +101,11 @@ function getSqliteInstance() {
         profit_target REAL DEFAULT 0.00,
         max_win_limit REAL DEFAULT 0.00,
         max_loss_limit REAL DEFAULT 0.00,
+        verified_bonus_credited INTEGER DEFAULT 0,
+        registered_bonus_credited INTEGER DEFAULT 0,
+        referral_bonus_credited INTEGER DEFAULT 0,
+        registered_bonus_amount REAL DEFAULT 0.0,
+        first_deposit_bonus_credited INTEGER DEFAULT 0,
         first_deposit_amount REAL DEFAULT 0.0,
         first_deposit_promo_credited INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -109,20 +114,35 @@ function getSqliteInstance() {
       );
     `);
 
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS force_outcome TEXT DEFAULT ''"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_target REAL DEFAULT 0.00"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS max_win_limit REAL DEFAULT 0.00"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS max_loss_limit REAL DEFAULT 0.00"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS plain_password TEXT DEFAULT ''"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_bonus_credited INTEGER DEFAULT 0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_bonus_credited INTEGER DEFAULT 0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_credited INTEGER DEFAULT 0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_bonus_amount REAL DEFAULT 0.0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_bonus_credited INTEGER DEFAULT 0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_amount REAL DEFAULT 0.0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_promo_credited INTEGER DEFAULT 0"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'"); } catch(e) {}
-    try { rawDb.exec("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'Crypto'"); } catch(e) {}
+    // Helper to safely ensure columns exist in SQLite tables
+    const ensureSqliteColumn = (tableName: string, columnName: string, columnDef: string) => {
+      try {
+        const tableInfo = rawDb.prepare(`PRAGMA table_info(${tableName})`).all() as any[];
+        const exists = tableInfo && tableInfo.some((col: any) => col.name === columnName);
+        if (!exists) {
+          rawDb.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
+          console.log(`[SQLite Migration] Added missing column ${columnName} to ${tableName}`);
+        }
+      } catch (err: any) {
+        console.warn(`[SQLite Migration] Column check/add failed for ${tableName}.${columnName}:`, err?.message || err);
+      }
+    };
+
+    ensureSqliteColumn("users", "force_outcome", "TEXT DEFAULT ''");
+    ensureSqliteColumn("users", "profit_target", "REAL DEFAULT 0.00");
+    ensureSqliteColumn("users", "max_win_limit", "REAL DEFAULT 0.00");
+    ensureSqliteColumn("users", "max_loss_limit", "REAL DEFAULT 0.00");
+    ensureSqliteColumn("users", "plain_password", "TEXT DEFAULT ''");
+    ensureSqliteColumn("users", "verified_bonus_credited", "INTEGER DEFAULT 0");
+    ensureSqliteColumn("users", "registered_bonus_credited", "INTEGER DEFAULT 0");
+    ensureSqliteColumn("users", "referral_bonus_credited", "INTEGER DEFAULT 0");
+    ensureSqliteColumn("users", "registered_bonus_amount", "REAL DEFAULT 0.0");
+    ensureSqliteColumn("users", "first_deposit_bonus_credited", "INTEGER DEFAULT 0");
+    ensureSqliteColumn("users", "first_deposit_amount", "REAL DEFAULT 0.0");
+    ensureSqliteColumn("users", "first_deposit_promo_credited", "INTEGER DEFAULT 0");
+    ensureSqliteColumn("withdrawals", "status", "TEXT DEFAULT 'pending'");
+    ensureSqliteColumn("withdrawals", "payment_method", "TEXT DEFAULT 'Crypto'");
+    ensureSqliteColumn("withdrawals", "binance_id", "TEXT");
 
     rawDb.exec(`
       CREATE TABLE IF NOT EXISTS user_sessions (
@@ -401,6 +421,11 @@ function getD1Database() {
             profit_target REAL DEFAULT 0.00,
             max_win_limit REAL DEFAULT 0.00,
             max_loss_limit REAL DEFAULT 0.00,
+            verified_bonus_credited INTEGER DEFAULT 0,
+            registered_bonus_credited INTEGER DEFAULT 0,
+            referral_bonus_credited INTEGER DEFAULT 0,
+            registered_bonus_amount REAL DEFAULT 0.0,
+            first_deposit_bonus_credited INTEGER DEFAULT 0,
             first_deposit_amount REAL DEFAULT 0.0,
             first_deposit_promo_credited INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -414,6 +439,9 @@ function getD1Database() {
           ALTER TABLE users ADD COLUMN IF NOT EXISTS max_loss_limit REAL DEFAULT 0.00;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS plain_password TEXT DEFAULT '';
           ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_bonus_credited INTEGER DEFAULT 0;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_bonus_credited INTEGER DEFAULT 0;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_credited INTEGER DEFAULT 0;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_bonus_amount REAL DEFAULT 0.0;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_bonus_credited INTEGER DEFAULT 0;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_amount REAL DEFAULT 0.0;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_promo_credited INTEGER DEFAULT 0;
@@ -2780,6 +2808,32 @@ Active technical indicator values: ${indicatorsString}.`}`;
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid ad amount.' });
+    }
+
+    // Check user real balance: user cannot post ads to sell crypto they do not own
+    let userRecord: any = null;
+    if (db.prepare) {
+      userRecord = await db.prepare('SELECT id, real_balance FROM users WHERE id = ?').bind(userId).first();
+    } else {
+      const resUser = await db.query('SELECT id, real_balance FROM users WHERE id = $1', [userId]);
+      userRecord = resUser.rows[0];
+    }
+
+    if (!userRecord) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const userRealBal = Number(userRecord.real_balance || 0);
+    if (type === 'sell' && numAmount > userRealBal) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient real balance. You have $${userRealBal.toFixed(2)} in your real account. You cannot post an ad to sell $${numAmount.toFixed(2)}.`
+      });
+    }
+
     const reqKyc = required_kyc ? 1 : 0;
     const reqMinTrades = Number(required_min_trades) || 0;
     const termsText = terms || '';

@@ -23,11 +23,14 @@ export default function P2PPostAdModal({
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
   const [pricingType, setPricingType] = useState<'fixed' | 'floating'>('fixed');
   const [floatingMargin, setFloatingMargin] = useState('100'); // 100% of market
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+
+  const userRealBalance = Number(currentUser?.real_balance ?? currentUser?.balance ?? 0);
 
   const [adForm, setAdForm] = useState({
     type: 'sell', // 'sell' = user sells crypto (displays under BUY tab for others), 'buy' = user buys crypto (displays under SELL tab)
     coin: 'USDT',
-    amount: '1000',
+    amount: userRealBalance > 0 ? Math.min(1000, userRealBalance).toString() : '0',
     price: '1.00',
     fiat_currency: 'USD',
     paymentMethod: 'Bank Transfer',
@@ -64,13 +67,20 @@ export default function P2PPostAdModal({
 
   const handleNext = (e: React.FormEvent) => {
     e.preventDefault();
+    setBalanceError(null);
     if (currentStep === 1) {
       if (!parseFloat(adForm.price) || parseFloat(adForm.price) <= 0) {
         return;
       }
       setCurrentStep(2);
     } else if (currentStep === 2) {
-      if (!parseFloat(adForm.amount) || parseFloat(adForm.amount) <= 0) {
+      const amountVal = parseFloat(adForm.amount);
+      if (!amountVal || amountVal <= 0) {
+        setBalanceError('Please enter a valid trading quantity.');
+        return;
+      }
+      if (adForm.type === 'sell' && amountVal > userRealBalance) {
+        setBalanceError(`Insufficient funds: You have $${userRealBalance.toFixed(2)} in your Real Account. You cannot post an ad to sell $${amountVal.toFixed(2)}.`);
         return;
       }
       setCurrentStep(3);
@@ -80,6 +90,12 @@ export default function P2PPostAdModal({
   };
 
   const handleSubmit = () => {
+    const amountVal = parseFloat(adForm.amount);
+    if (adForm.type === 'sell' && amountVal > userRealBalance) {
+      setBalanceError(`Insufficient funds: You have $${userRealBalance.toFixed(2)} in your Real Account. You cannot post an ad to sell $${amountVal.toFixed(2)}.`);
+      return;
+    }
+
     onSubmitAd({
       ...adForm,
       amount: parseFloat(adForm.amount),
@@ -189,6 +205,12 @@ export default function P2PPostAdModal({
                     <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Your ad appears under the <strong>BUY</strong> tab. Users buy crypto from you with fiat transfer.
                     </p>
+                    <div className="mt-2 pt-1.5 border-t border-rose-500/20 flex items-center justify-between text-[10px] font-mono">
+                      <span className="text-slate-400">Available Real Balance:</span>
+                      <span className={`font-bold ${userRealBalance > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        ${userRealBalance.toFixed(2)} USDT
+                      </span>
+                    </div>
                   </button>
 
                   <button
@@ -209,6 +231,10 @@ export default function P2PPostAdModal({
                     <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Your ad appears under the <strong>SELL</strong> tab. Users sell crypto to you and receive your fiat.
                     </p>
+                    <div className="mt-2 pt-1.5 border-t border-emerald-500/20 flex items-center justify-between text-[10px] font-mono">
+                      <span className="text-slate-400">Settlement:</span>
+                      <span className="font-bold text-emerald-400">External Escrow Rail</span>
+                    </div>
                   </button>
                 </div>
               </div>
@@ -325,9 +351,16 @@ export default function P2PPostAdModal({
                   <label className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">
                     Total Trading Quantity ({adForm.coin})
                   </label>
-                  <span className="text-xs text-[#fcd535] font-bold">
-                    ≈ {totalFiatValue} {adForm.fiat_currency}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {adForm.type === 'sell' && (
+                      <span className="text-[11px] font-mono text-slate-400">
+                        Available: <strong className={userRealBalance > 0 ? 'text-emerald-400' : 'text-rose-400'}>${userRealBalance.toFixed(2)}</strong>
+                      </span>
+                    )}
+                    <span className="text-xs text-[#fcd535] font-bold">
+                      ≈ {totalFiatValue} {adForm.fiat_currency}
+                    </span>
+                  </div>
                 </div>
                 <div className="relative">
                   <input
@@ -335,13 +368,39 @@ export default function P2PPostAdModal({
                     step="any"
                     required
                     value={adForm.amount}
-                    onChange={(e) => setAdForm({ ...adForm, amount: e.target.value })}
-                    className="w-full bg-[#181a20] border border-[#2b313a] focus:border-[#fcd535] rounded-xl px-3.5 py-2.5 text-white font-mono text-base font-bold outline-none"
+                    onChange={(e) => {
+                      setBalanceError(null);
+                      setAdForm({ ...adForm, amount: e.target.value });
+                    }}
+                    className={`w-full bg-[#181a20] border rounded-xl pl-3.5 pr-20 py-2.5 text-white font-mono text-base font-bold outline-none ${
+                      balanceError ? 'border-rose-500 focus:border-rose-400' : 'border-[#2b313a] focus:border-[#fcd535]'
+                    }`}
                   />
-                  <span className="absolute right-3.5 top-3 text-xs text-slate-400 font-bold">
-                    {adForm.coin}
-                  </span>
+                  <div className="absolute right-3 top-2 flex items-center gap-1.5">
+                    {adForm.type === 'sell' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBalanceError(null);
+                          setAdForm({ ...adForm, amount: userRealBalance.toString() });
+                        }}
+                        className="px-2 py-1 rounded bg-[#fcd535]/15 hover:bg-[#fcd535]/25 text-[#fcd535] text-[10px] font-black font-mono cursor-pointer transition-colors"
+                      >
+                        MAX
+                      </button>
+                    )}
+                    <span className="text-xs text-slate-400 font-bold">
+                      {adForm.coin}
+                    </span>
+                  </div>
                 </div>
+
+                {balanceError && (
+                  <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{balanceError}</span>
+                  </div>
+                )}
               </div>
 
               {/* Order Limits in Fiat */}

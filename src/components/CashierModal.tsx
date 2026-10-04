@@ -936,8 +936,8 @@ export default function CashierModal({
               </div>
             )}
 
-            {/* Kenya Paybill vs NOWPayments select bar */}
-            {isKenya && !depositAddress && (isPaybillAllowed || isBtcAllowed) && (
+            {/* Payment Gateway Option Selector: M-Pesa Paybill vs NOWPayments Crypto */}
+            {!depositAddress && (isPaybillAllowed || isBtcAllowed) && (
               <div className="space-y-1.5 pt-1.5 border-t border-slate-850 dark:border-slate-800/60">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                   Select payment route

@@ -462,14 +462,24 @@ function getD1Database() {
           ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_amount REAL DEFAULT 0.0;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_promo_credited INTEGER DEFAULT 0;
 
+          CREATE TABLE IF NOT EXISTS device_registrations (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+
           CREATE TABLE IF NOT EXISTS user_sessions (
             session_id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             token TEXT UNIQUE NOT NULL,
+            device_id TEXT,
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
           );
+
+          ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS device_id TEXT;
 
           CREATE TABLE IF NOT EXISTS user_profiles (
             user_id TEXT PRIMARY KEY,
@@ -477,10 +487,23 @@ function getD1Database() {
             country TEXT,
             verification_status TEXT DEFAULT 'unverified',
             two_factor_enabled INTEGER DEFAULT 0,
+            device_id TEXT,
+            device_info TEXT,
+            google_email TEXT,
+            google_name TEXT,
+            google_picture TEXT,
+            google_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
           );
+
+          ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS device_id TEXT;
+          ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS device_info TEXT;
+          ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS google_email TEXT;
+          ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS google_name TEXT;
+          ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS google_picture TEXT;
+          ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS google_id TEXT;
 
           CREATE TABLE IF NOT EXISTS credited_deposits (
             tx_hash TEXT PRIMARY KEY,
@@ -2652,13 +2675,14 @@ Active technical indicator values: ${indicatorsString}.`}`;
       }
 
       const normalizedInput = email.trim().toLowerCase();
+      const cleanPhoneInput = email.replace(/[\s\-\+\(\)]/g, '');
 
       const db = getD1Database();
       const user = await db.prepare(`
         SELECT u.* FROM users u 
         LEFT JOIN user_profiles up ON u.id = up.user_id 
-        WHERE LOWER(u.email) = ? OR up.phone = ?
-      `).bind(normalizedInput, email.trim()).first();
+        WHERE LOWER(u.email) = ? OR up.phone = ? OR up.phone = ?
+      `).bind(normalizedInput, email.trim(), cleanPhoneInput).first();
 
       if (!user) {
         return res.status(401).json({ success: false, message: 'Invalid email/phone or password.' });

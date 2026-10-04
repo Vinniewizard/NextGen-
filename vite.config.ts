@@ -40,9 +40,25 @@ export default defineConfig(() => {
       alias: {
         '@': path.resolve(import.meta.dirname || '.', '.'),
       },
+      dedupe: ['react', 'react-dom', 'react-is'],
     },
     build: {
-      chunkSizeWarningLimit: 2500,
+      chunkSizeWarningLimit: 3000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('recharts') || id.includes('d3')) {
+                return 'vendor-charts';
+              }
+              if (id.includes('react') || id.includes('motion')) {
+                return 'vendor-react';
+              }
+              return 'vendor';
+            }
+          }
+        }
+      }
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

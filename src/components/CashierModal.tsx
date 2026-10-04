@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CreditCard, ArrowDownCircle, ArrowUpRight, DollarSign, Wallet2, Check, RefreshCw, X, Shield, History, Clock } from 'lucide-react';
+import { CreditCard, ArrowDownCircle, ArrowUpRight, DollarSign, Wallet2, Check, RefreshCw, X, Shield, History, Clock, Smartphone } from 'lucide-react';
 import { Account } from '../types';
 
 interface CashierModalProps {
@@ -66,25 +66,6 @@ export default function CashierModal({
 
   const isKenya = currentUser?.country?.toLowerCase() === 'kenya';
   const isCryptoRoute = paymentMethod === 'nowpayments';
-
-  // Automatically lock payment option for non-Kenyan users to NOWPayments (crypto)
-  useEffect(() => {
-    if (isOpen) {
-      if (currentUser?.country?.toLowerCase() === 'kenya') {
-        if (isPaybillAllowed) {
-          setPaymentMethod('paybill');
-        } else if (isBtcAllowed) {
-          setPaymentMethod('nowpayments');
-        }
-      } else {
-        if (isBtcAllowed) {
-          setPaymentMethod('nowpayments');
-        } else if (isPaybillAllowed) {
-          setPaymentMethod('paybill');
-        }
-      }
-    }
-  }, [isOpen, currentUser, isPaybillAllowed, isBtcAllowed]);
 
   // Load persistent pending deposit if exists for current user
   useEffect(() => {
@@ -382,7 +363,9 @@ export default function CashierModal({
     setSuccessMsg('');
     setApiError('');
 
-    if (method === 'nowpayments') {
+    if (method === 'paybill') {
+      setDepositAddress(null);
+    } else {
       setSelectedCoin('BTC');
       setSelectedNetwork('BTC');
     }
@@ -937,23 +920,28 @@ export default function CashierModal({
             )}
 
             {/* Payment Gateway Option Selector: M-Pesa Paybill vs NOWPayments Crypto */}
-            {!depositAddress && (isPaybillAllowed || isBtcAllowed) && (
-              <div className="space-y-1.5 pt-1.5 border-t border-slate-850 dark:border-slate-800/60">
+            {(isPaybillAllowed || isBtcAllowed) && (
+              <div className="space-y-2 pt-2 border-t border-slate-800">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                  Select payment route
+                  Select Payment Gateway
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   {isPaybillAllowed && (
                     <button
                       id="cashier-route-mpesa"
                       type="button"
                       onClick={() => selectPaymentMethod('paybill')}
-                      className={`rounded-lg border p-3.5 sm:p-3 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 ${
-                        paymentMethod === 'paybill' ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-slate-850 text-slate-400 hover:bg-slate-900'
+                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                        paymentMethod === 'paybill' 
+                          ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md' 
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
                       }`}
                     >
-                      <DollarSign className="h-5 w-5" />
-                      <span className="text-[10px] font-black">{activeTab === 'deposit' ? 'M-Pesa Paybill' : 'M-Pesa'}</span>
+                      <Smartphone className="w-5 h-5 text-emerald-400 shrink-0" />
+                      <div>
+                        <span className="font-black text-xs block text-white">M-Pesa Paybill</span>
+                        <span className="text-[9px] text-slate-400 block">Instant Kenya Mobile</span>
+                      </div>
                     </button>
                   )}
 
@@ -962,12 +950,17 @@ export default function CashierModal({
                       id="cashier-route-crypto"
                       type="button"
                       onClick={() => selectPaymentMethod('nowpayments')}
-                      className={`rounded-lg border p-3.5 sm:p-3 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 ${
-                        paymentMethod === 'nowpayments' ? 'border-yellow-500 text-yellow-500 bg-yellow-500/10' : 'border-slate-850 text-slate-400 hover:bg-slate-900'
+                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                        paymentMethod === 'nowpayments' 
+                          ? 'bg-yellow-500/10 border-yellow-500 text-white shadow-md' 
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
                       }`}
                     >
-                      <RefreshCw className="h-5 w-5" />
-                      <span className="text-[10px] font-black">BTC Deposit</span>
+                      <RefreshCw className="w-5 h-5 text-yellow-400 shrink-0" />
+                      <div>
+                        <span className="font-black text-xs block text-white">NOWPayments Crypto</span>
+                        <span className="text-[9px] text-slate-400 block">BTC, ETH, USDT</span>
+                      </div>
                     </button>
                   )}
                 </div>

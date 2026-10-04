@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import Chart from './components/Chart';
 import TradeControls from './components/TradeControls';
 import QuickTradePanel from './components/QuickTradePanel';
 import PositionsList from './components/PositionsList';
-import WizardBot from './components/WizardBot';
+const WizardBot = lazy(() => import('./components/WizardBot'));
 import CashierModal from './components/CashierModal';
 import GuideModal from './components/GuideModal';
 import SettingsModal from './components/SettingsModal';
 import InviteModal from './components/InviteModal';
-import AdminDashboard from './components/AdminDashboard';
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 import FinanceDashboard from './components/FinanceDashboard';
 import P2PMarketplace from './components/P2PMarketplace';
 import AuthModal from './components/AuthModal';
@@ -6233,18 +6233,20 @@ export default function App() {
       {/* ============================================== */}
       {/* 4. MODALS & CO-PILOT SLIDERS */}
       {/* ============================================== */}
-      <WizardBot 
-        theme={theme}
-        asset={activeAsset}
-        tickHistory={activeTicks}
-        indicatorConfig={indicatorConfig}
-        isOpen={isCopilotOpen}
-        onClose={() => setIsCopilotOpen(false)}
-        currentUser={currentUser}
-        tradeHistory={tradeHistory}
-        onTriggerAuth={handleTriggerAuth}
-        triggerToast={triggerToast}
-      />
+      <Suspense fallback={null}>
+        <WizardBot 
+          theme={theme}
+          asset={activeAsset}
+          tickHistory={activeTicks}
+          indicatorConfig={indicatorConfig}
+          isOpen={isCopilotOpen}
+          onClose={() => setIsCopilotOpen(false)}
+          currentUser={currentUser}
+          tradeHistory={tradeHistory}
+          onTriggerAuth={handleTriggerAuth}
+          triggerToast={triggerToast}
+        />
+      </Suspense>
 
       <CashierModal 
         isOpen={isCashierOpen}
@@ -6393,12 +6395,14 @@ export default function App() {
         initialView={authModalInitialView}
       />
 
-      <AdminDashboard 
-        isOpen={isAdminOpen}
-        onClose={() => setIsAdminOpen(false)}
-        theme={theme}
-        triggerToast={triggerToast}
-      />
+      <Suspense fallback={null}>
+        <AdminDashboard 
+          isOpen={isAdminOpen}
+          onClose={() => setIsAdminOpen(false)}
+          theme={theme}
+          triggerToast={triggerToast}
+        />
+      </Suspense>
 
       <WelcomeModal 
         isOpen={isWelcomeModalOpen} 

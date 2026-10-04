@@ -126,12 +126,23 @@ export default function AuthModal({ isOpen, onClose, theme, onSuccess, initialVi
     }
   };
 
+  const getDeviceDetails = () => {
+    let deviceId = localStorage.getItem('lwex_device_id');
+    if (!deviceId) {
+      deviceId = 'dev-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('lwex_device_id', deviceId);
+    }
+    const deviceInfo = `${navigator.platform || 'Unknown OS'} | ${navigator.userAgent} | Screen: ${window.screen.width}x${window.screen.height}`;
+    return { deviceId, deviceInfo };
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
     setIsLoading(true);
 
     const cleanEmail = email.trim().toLowerCase();
+    const { deviceId, deviceInfo } = getDeviceDetails();
     
     if (view === 'register') {
       if (password.length < 8) {
@@ -177,7 +188,9 @@ export default function AuthModal({ isOpen, onClose, theme, onSuccess, initialVi
           fullName: cleanEmail.split('@')[0], 
           country, 
           referredBy,
-          rememberMe 
+          rememberMe,
+          deviceId,
+          deviceInfo
         })
       })
       .then(async (res) => {
@@ -207,7 +220,7 @@ export default function AuthModal({ isOpen, onClose, theme, onSuccess, initialVi
       fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, password, rememberMe })
+        body: JSON.stringify({ email: cleanEmail, password, rememberMe, deviceId, deviceInfo })
       })
       .then(async (res) => {
         const data = await res.json();

@@ -143,12 +143,28 @@ function getSqliteInstance() {
     ensureSqliteColumn("withdrawals", "status", "TEXT DEFAULT 'pending'");
     ensureSqliteColumn("withdrawals", "payment_method", "TEXT DEFAULT 'Crypto'");
     ensureSqliteColumn("withdrawals", "binance_id", "TEXT");
+    ensureSqliteColumn("user_sessions", "device_id", "TEXT");
+    ensureSqliteColumn("user_profiles", "device_id", "TEXT");
+    ensureSqliteColumn("user_profiles", "device_info", "TEXT");
+    ensureSqliteColumn("user_profiles", "google_email", "TEXT");
+    ensureSqliteColumn("user_profiles", "google_name", "TEXT");
+    ensureSqliteColumn("user_profiles", "google_picture", "TEXT");
+    ensureSqliteColumn("user_profiles", "google_id", "TEXT");
 
     rawDb.exec(`
+      CREATE TABLE IF NOT EXISTS device_registrations (
+        id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_registrations_device ON device_registrations(device_id);
+
       CREATE TABLE IF NOT EXISTS user_sessions (
         session_id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         token TEXT UNIQUE NOT NULL,
+        device_id TEXT,
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id)
@@ -2462,7 +2478,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/register', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const { email, password, fullName, phone, country, referredBy, rememberMe } = req.body;
+      const { email, password, fullName, phone, country, referredBy, rememberMe, deviceId, deviceInfo, googleEmail, googleName, googlePicture, googleId } = req.body;
       
       if (!email || !password) {
         return res.status(400).json({ success: false, message: 'Email and password are required.' });
@@ -2474,6 +2490,14 @@ Active technical indicator values: ${indicatorsString}.`}`;
       }
 
       const db = getD1Database();
+
+      // Check max 2 accounts per device limit
+      if (deviceId) {
+        const deviceCheck = await db.prepare('SELECT COUNT(DISTINCT user_id) as cnt FROM device_registrations WHERE device_id = ?').bind(deviceId).first();
+        if (deviceCheck && Number(deviceCheck.cnt) >= 2) {
+          return res.status(403).json({ success: false, message: 'Security restriction: Maximum limit of 2 accounts per device has been reached.' });
+        }
+      }
 
       // Check if email already registered
       const existingUser = await db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').bind(normalizedEmail).first();
@@ -2505,9 +2529,28 @@ Active technical indicator values: ${indicatorsString}.`}`;
         .run();
 
       await db.prepare(
-        `INSERT INTO user_profiles (user_id, phone, country, verification_status, two_factor_enabled, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(userId, phone || null, country || 'Kenya', 'unverified', 0, now, now).run();
+        `INSERT INTO user_profiles (user_id, phone, country, verification_status, two_factor_enabled, device_id, device_info, google_email, google_name, google_picture, google_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        userId, 
+        phone || null, 
+        country || 'Kenya', 
+        'unverified', 
+        0, 
+        deviceId || null, 
+        deviceInfo || null, 
+        googleEmail || null, 
+        googleName || null, 
+        googlePicture || null, 
+        googleId || null, 
+        now, 
+        now
+      ).run();
+
+      if (deviceId) {
+        const regId = `reg-${crypto.randomBytes(8).toString('hex')}`;
+        await db.prepare('INSERT INTO device_registrations (id, device_id, user_id, created_at) VALUES (?, ?, ?, ?)').bind(regId, deviceId, userId, now).run();
+      }
 
       if (referredBy) {
         const referrer = await db.prepare('SELECT id FROM users WHERE id = ?').bind(referredBy).first();
@@ -2557,9 +2600,20 @@ Active technical indicator values: ${indicatorsString}.`}`;
       const expiresAt = new Date(Date.now() + sessionDuration).toISOString();
 
       await db.prepare(
-        `INSERT INTO user_sessions (session_id, user_id, token, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?)`
-      ).bind(sessionId, userId, sessionToken, now, expiresAt).run();
+        `INSERT INTO user_sessions (session_id, user_id, token, device_id, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(sessionId, userId, sessionToken, deviceId || null, now, expiresAt).run();
+
+      // Enforce max 2 active device sessions logged in at the same time
+      await db.prepare(`
+        DELETE FROM user_sessions 
+        WHERE user_id = ? AND session_id NOT IN (
+          SELECT session_id FROM user_sessions 
+          WHERE user_id = ? 
+          ORDER BY created_at DESC 
+          LIMIT 2
+        )
+      `).bind(userId, userId).run();
 
       return res.json({
         success: true,
@@ -2591,7 +2645,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/login', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const { email, password, rememberMe } = req.body;
+      const { email, password, rememberMe, deviceId, deviceInfo } = req.body;
       
       if (!email || !password) {
         return res.status(400).json({ success: false, message: 'Email/Phone and password are required.' });
@@ -2632,11 +2686,27 @@ Active technical indicator values: ${indicatorsString}.`}`;
       const expiresAt = new Date(Date.now() + sessionDuration).toISOString();
 
       await db.prepare(
-        `INSERT INTO user_sessions (session_id, user_id, token, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?)`
-      ).bind(sessionId, user.id, sessionToken, now, expiresAt).run();
+        `INSERT INTO user_sessions (session_id, user_id, token, device_id, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(sessionId, user.id, sessionToken, deviceId || null, now, expiresAt).run();
+
+      // Enforce max 2 active device sessions logged in at the same time
+      await db.prepare(`
+        DELETE FROM user_sessions 
+        WHERE user_id = ? AND session_id NOT IN (
+          SELECT session_id FROM user_sessions 
+          WHERE user_id = ? 
+          ORDER BY created_at DESC 
+          LIMIT 2
+        )
+      `).bind(user.id, user.id).run();
 
       // Update last login
+      if (deviceId || deviceInfo) {
+        await db.prepare('UPDATE user_profiles SET device_id = COALESCE(?, device_id), device_info = COALESCE(?, device_info), updated_at = ? WHERE user_id = ?')
+          .bind(deviceId || null, deviceInfo || null, now, user.id).run();
+      }
+
       await db.prepare('UPDATE users SET last_login = ?, updated_at = ? WHERE id = ?').bind(now, now, user.id).run();
 
       return res.json({

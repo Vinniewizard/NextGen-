@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Wallet, ArrowUpRight, ArrowDownRight, CreditCard, Building, 
   Smartphone, ShieldCheck, RefreshCw, CheckCircle2, History, DollarSign,
-  AlertCircle, Copy, Check, X, Download, Clock, ShieldAlert, ArrowRight
+  AlertCircle, Copy, Check, X, Download, Clock, ShieldAlert, ArrowRight, Shield
 } from 'lucide-react';
 
 interface FinanceDashboardProps {
@@ -26,10 +26,19 @@ export default function FinanceDashboard({
   
   // Deposit state
   const [depositAmount, setDepositAmount] = useState<number>(50);
-  const [depositMethod, setDepositMethod] = useState<'paybill' | 'usdt' | 'btc' | 'bank' | 'chipper'>('paybill');
+  const [depositMethod, setDepositMethod] = useState<'paybill' | 'nowpayments'>('paybill');
+  const [selectedCoin, setSelectedCoin] = useState('BTC');
+  const [selectedNetwork, setSelectedNetwork] = useState('BTC');
+  const [depositAddress, setDepositAddress] = useState<{ address?: string; tag?: string; url?: string; paymentId?: string; amount?: number } | null>(null);
+  const [isAddressLoading, setIsAddressLoading] = useState(false);
+  const [sandboxReason, setSandboxReason] = useState<string>('');
+  const [isPolling, setIsPolling] = useState(false);
+  const [copiedType, setCopiedType] = useState<'address' | 'tag' | 'amount' | null>(null);
+
   const [activeDeposit, setActiveDeposit] = useState<any>(null);
   const [mpesaCode, setMpesaCode] = useState('');
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [txHash, setTxHash] = useState('');
   
   // Withdrawal state
   const [withdrawAmount, setWithdrawAmount] = useState<number>(25);
@@ -46,7 +55,6 @@ export default function FinanceDashboard({
   // UI state
   const [isProcessing, setIsProcessing] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const realBalance = Number(currentUser?.real_balance ?? currentUser?.balance ?? 0);
   const demoBalance = Number(currentUser?.demo_balance ?? 10000);
@@ -58,10 +66,12 @@ export default function FinanceDashboard({
     setTimeout(() => setToast(null), 4500);
   };
 
-  const copyToClipboard = (text: string, fieldName: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(fieldName);
-    setTimeout(() => setCopiedField(null), 2000);
+  const handleCoinChange = (coin: string) => {
+    setSelectedCoin(coin);
+    if (coin === 'BTC') setSelectedNetwork('BTC');
+    else if (coin === 'ETH') setSelectedNetwork('ETH');
+    else if (coin === 'USDTTRC20') setSelectedNetwork('TRX');
+    else if (coin === 'USDT') setSelectedNetwork('ETH');
   };
 
   // Fetch active deposit session and statements
@@ -116,7 +126,6 @@ export default function FinanceDashboard({
           });
         });
 
-        // Also check if active deposit is pending
         if (activeDeposit && activeDeposit.status === 'pending') {
           combined.unshift({
             id: activeDeposit.id,
@@ -130,7 +139,6 @@ export default function FinanceDashboard({
           });
         }
 
-        // Sort desc
         combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         setTransactions(combined);
       }
@@ -146,8 +154,84 @@ export default function FinanceDashboard({
     fetchStatements();
   }, [currentUser?.id]);
 
-  // Initiate Procedural Deposit
-  const handleInitiateDeposit = async (e: React.FormEvent) => {
+  // Generate NOWPayments Crypto Address
+  const handleGenerateCryptoAddress = async () => {
+    if (depositAmount < minDeposit) {
+      triggerToast(`Minimum deposit is $${minDeposit.toFixed(2)} USD.`, 'error');
+      return;
+    }
+
+    setIsAddressLoading(true);
+    setSandboxReason('');
+    setDepositAddress(null);
+
+    const userId = currentUser?.id || currentUser?.email;
+    try {
+      const res = await fetch('/api/cashier/create-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: depositAmount,
+          coin: selectedCoin,
+          userId
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Unable to generate crypto deposit address.');
+      }
+
+      setDepositAddress({
+        address: data.address,
+        paymentId: data.payment_id,
+        amount: data.amount,
+        tag: data.tag || undefined
+      });
+
+      if (data.isSandbox && data.sandboxReason) {
+        setSandboxReason(data.sandboxReason);
+      }
+
+      triggerToast('Secure crypto deposit address generated successfully.');
+    } catch (err: any) {
+      triggerToast(err.message || 'Failed to locate secure crypto gateway.', 'error');
+    } finally {
+      setIsAddressLoading(false);
+    }
+  };
+
+  // Background polling for crypto deposit completion every 10 seconds
+  useEffect(() => {
+    if (activeTab !== 'deposit' || depositMethod !== 'nowpayments' || !depositAddress?.paymentId) return;
+
+    const interval = setInterval(async () => {
+      setIsPolling(true);
+      try {
+        const userId = currentUser?.id || currentUser?.email;
+        const res = await fetch(`/api/cashier/verify-deposit?paymentId=${depositAddress.paymentId}&userId=${userId}`);
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const credited = Number(data.creditedAmount) || depositAmount;
+          triggerToast(`Deposit successful! $${credited.toFixed(2)} USD credited to your real wallet.`);
+          setDepositAddress(null);
+          if (onBalanceUpdate) {
+            onBalanceUpdate(realBalance + credited);
+          }
+          fetchStatements();
+        }
+      } catch (e) {
+        console.warn('Silent deposit poll warning:', e);
+      } finally {
+        setIsPolling(false);
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [activeTab, depositMethod, depositAddress?.paymentId, currentUser?.id]);
+
+  // Initiate Paybill Deposit Order
+  const handleInitiatePaybill = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser?.id) {
       triggerToast('Please sign in to proceed with deposits.', 'error');
@@ -167,31 +251,31 @@ export default function FinanceDashboard({
         body: JSON.stringify({
           userId: currentUser.id,
           amount: depositAmount,
-          paymentMethod: depositMethod,
-          coin: depositMethod === 'paybill' ? 'KES' : 'USDT'
+          paymentMethod: 'paybill',
+          coin: 'KES'
         })
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to initiate deposit order.');
+        throw new Error(data.message || 'Failed to initiate Paybill order.');
       }
 
       setActiveDeposit(data.deposit);
-      triggerToast(`Deposit order of $${depositAmount} USD generated. Follow instructions to complete payment.`);
+      triggerToast(`Paybill deposit order of $${depositAmount} USD generated.`);
     } catch (err: any) {
-      triggerToast(err.message || 'Deposit initiation failed.', 'error');
+      triggerToast(err.message || 'Paybill initiation failed.', 'error');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Submit Payment Confirmation / Receipt
-  const handleSubmitDepositProof = async (e: React.FormEvent) => {
+  // Submit Paybill Payment Proof / Receipt
+  const handleSubmitPaybillProof = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeDeposit) return;
     if (!mpesaCode.trim() && !receiptFile) {
-      triggerToast('Please provide your M-Pesa transaction confirmation message or upload a receipt.', 'error');
+      triggerToast('Please enter your M-Pesa confirmation SMS code or upload a receipt screenshot.', 'error');
       return;
     }
 
@@ -200,7 +284,7 @@ export default function FinanceDashboard({
       const formData = new FormData();
       formData.append('userId', currentUser?.id);
       formData.append('amount', (activeDeposit.amount || depositAmount).toString());
-      formData.append('paymentMethod', activeDeposit.paymentMethod || depositMethod);
+      formData.append('paymentMethod', 'paybill');
       if (receiptFile) formData.append('receipt', receiptFile);
       if (mpesaCode) formData.append('message', mpesaCode);
 
@@ -211,7 +295,7 @@ export default function FinanceDashboard({
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to submit payment proof.');
+        throw new Error(data.message || 'Receipt upload failed.');
       }
 
       triggerToast('Payment proof submitted successfully! Administrator is reviewing your deposit.');
@@ -246,6 +330,7 @@ export default function FinanceDashboard({
       }
 
       setActiveDeposit(null);
+      setDepositAddress(null);
       setMpesaCode('');
       setReceiptFile(null);
       triggerToast('Deposit order cancelled. You can now initiate a new deposit.');
@@ -434,143 +519,33 @@ export default function FinanceDashboard({
         </div>
       </div>
 
-      {/* 200% PROMOTIONAL MATCH BANNER */}
-      {currentUser && (
-        <div className="p-4 rounded-xl bg-gradient-to-r from-amber-500/15 via-amber-600/10 to-transparent border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">🎁</span>
-            <div>
-              <div className="text-xs font-black text-amber-300 uppercase tracking-wide">
-                200% First Deposit Match Bonus Active
-              </div>
-              <p className="text-[11px] text-slate-300">
-                Deposit $20 or more and complete 5 real trades to unlock up to $500 in matching capital.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => setActiveTab('deposit')}
-            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] uppercase tracking-wide cursor-pointer shrink-0"
-          >
-            Claim Bonus Now
-          </button>
-        </div>
-      )}
-
       {/* ================= TAB 1: OVERVIEW ================= */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
-          {/* Balance Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-3 relative overflow-hidden">
-              <div className="flex justify-between items-start">
-                <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Live Real Balance</span>
-                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[9px] font-bold uppercase">Real Trading</span>
-              </div>
+            <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-3">
+              <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Live Real Balance</span>
               <div className="text-3xl font-black font-mono text-white tracking-tight">
                 ${realBalance.toFixed(2)} <span className="text-xs text-[#fcd535] font-normal">USD</span>
               </div>
-              <div className="flex items-center justify-between pt-2 border-t border-[#2b313a] text-[11px]">
-                <span className="text-slate-400">Available for withdrawal:</span>
-                <span className="font-bold text-white font-mono">${realBalance.toFixed(2)}</span>
-              </div>
+              <span className="text-[11px] text-emerald-400 block font-mono">● Available for live trading & withdrawal</span>
             </div>
-
             <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-3">
-              <div className="flex justify-between items-start">
-                <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Practice Demo Balance</span>
-                <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[9px] font-bold uppercase">Virtual</span>
-              </div>
+              <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Practice Demo Balance</span>
               <div className="text-3xl font-black font-mono text-slate-300 tracking-tight">
                 ${demoBalance.toFixed(2)} <span className="text-xs text-slate-500 font-normal">USD</span>
               </div>
-              <div className="flex items-center justify-between pt-2 border-t border-[#2b313a] text-[11px]">
-                <span className="text-slate-400">Unlimited sandbox reload</span>
-                <button
-                  onClick={() => triggerToast('Demo balance is active for zero-risk practice.')}
-                  className="text-blue-400 font-bold hover:underline"
-                >
-                  Learn Strategy
-                </button>
-              </div>
+              <span className="text-[11px] text-blue-400 block font-mono">● Zero-risk sandbox capital</span>
             </div>
-
-            <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-3">
-              <div className="flex justify-between items-start">
-                <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Limits & Thresholds</span>
-                <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 text-[9px] font-bold uppercase">Admin Config</span>
+            <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-3 font-mono text-xs">
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Limits & Thresholds</span>
+              <div className="flex justify-between text-slate-300">
+                <span>Min Deposit:</span>
+                <span className="font-bold text-emerald-400">${minDeposit.toFixed(2)} USD</span>
               </div>
-              <div className="space-y-1.5 font-mono text-xs">
-                <div className="flex justify-between text-slate-300">
-                  <span>Min Deposit:</span>
-                  <span className="font-bold text-emerald-400">${minDeposit.toFixed(2)} USD</span>
-                </div>
-                <div className="flex justify-between text-slate-300">
-                  <span>Min Withdrawal:</span>
-                  <span className="font-bold text-rose-400">${minWithdrawal.toFixed(2)} USD</span>
-                </div>
-                <div className="flex justify-between text-slate-300">
-                  <span>Settlement Speed:</span>
-                  <span className="font-bold text-[#fcd535]">Instant (&lt; 15m)</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Quick Rails & Security Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-mono font-bold text-slate-400 uppercase tracking-wider">
-                  Supported Payment Rails
-                </h3>
-                <span className="text-[10px] text-emerald-400 font-mono">● All Rails Active</span>
-              </div>
-              <div className="space-y-2">
-                {[
-                  { name: 'Safaricom M-Pesa (Paybill 247247)', fee: '$0.00 Free', time: 'Instant / < 5 mins', rail: 'paybill' },
-                  { name: 'Tether USDT (TRC20 / ERC20)', fee: '$0.00 Free', time: '1 Blockchain Confirm', rail: 'usdt' },
-                  { name: 'Bitcoin (BTC)', fee: '$0.00 Free', time: '1 Blockchain Confirm', rail: 'btc' },
-                  { name: 'Bank Wire / Wire Transfer', fee: '$0.00 Free', time: '15-30 mins', rail: 'bank' }
-                ].map((r, i) => (
-                  <div key={i} className="p-3 rounded-xl bg-[#0b0e11] border border-[#2b313a] flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-bold text-white block">{r.name}</span>
-                      <span className="text-[10px] text-slate-400">Speed: {r.time} · Fee: {r.fee}</span>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setDepositMethod(r.rail as any);
-                        setActiveTab('deposit');
-                      }}
-                      className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold rounded text-[10px] cursor-pointer"
-                    >
-                      Deposit
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-4">
-              <h3 className="text-xs font-mono font-bold text-slate-400 uppercase tracking-wider">
-                Audited Security Standards
-              </h3>
-              <div className="space-y-3 text-xs text-slate-300">
-                <div className="p-3.5 rounded-xl bg-[#0b0e11] border border-[#2b313a] flex items-start gap-3">
-                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white block font-sans">Cold-Storage Escrow Protocols</strong>
-                    User capital is preserved in isolated multi-signature cold wallets, shielded from market liquidity shocks.
-                  </div>
-                </div>
-                <div className="p-3.5 rounded-xl bg-[#0b0e11] border border-[#2b313a] flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-[#fcd535] shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white block font-sans">Manual & Automated Paybill Verification</strong>
-                    M-Pesa Paybill deposits are reconciled in real-time with administrator verification logs.
-                  </div>
-                </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Min Withdrawal:</span>
+                <span className="font-bold text-rose-400">${minWithdrawal.toFixed(2)} USD</span>
               </div>
             </div>
           </div>
@@ -580,7 +555,7 @@ export default function FinanceDashboard({
       {/* ================= TAB 2: DEPOSIT CASHIER ================= */}
       {activeTab === 'deposit' && (
         <div className="max-w-2xl mx-auto space-y-5">
-          {/* Active Deposit Session Card (If User Initiated a Deposit) */}
+          {/* Active Paybill Deposit Order Card */}
           {activeDeposit ? (
             <div className="p-6 rounded-2xl bg-[#181a20] border-2 border-emerald-500/40 space-y-5 shadow-2xl animate-fade-in">
               <div className="flex items-center justify-between border-b border-[#2b313a] pb-3">
@@ -589,220 +564,281 @@ export default function FinanceDashboard({
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
                   </span>
-                  <h2 className="text-base font-black text-white">
-                    Active Deposit Order ({activeDeposit.payment_method?.toUpperCase() || 'PAYBILL'})
-                  </h2>
+                  <h2 className="text-base font-black text-white">Active Paybill Deposit Order</h2>
                 </div>
-                <span className="px-2.5 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-black uppercase tracking-wide">
-                  {activeDeposit.status === 'pending' ? 'Pending Admin Approval' : 'Awaiting Payment'}
+                <span className="px-2.5 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-black uppercase">
+                  Pending Admin Approval
                 </span>
               </div>
 
-              {/* Procedural Instructions */}
               <div className="grid grid-cols-2 gap-3 p-4 rounded-xl bg-[#0b0e11] border border-[#2b313a] font-mono text-xs">
                 <div>
-                  <span className="text-[10px] text-slate-400 block uppercase">Paybill / Business No</span>
-                  <div className="flex items-center gap-1 text-emerald-400 font-black text-base">
-                    <span>247247</span>
-                    <button 
-                      onClick={() => copyToClipboard('247247', 'paybill')}
-                      className="text-slate-400 hover:text-white p-1 cursor-pointer"
-                    >
-                      {copiedField === 'paybill' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
+                  <span className="text-[10px] text-slate-400 block uppercase">Paybill Number</span>
+                  <span className="text-emerald-400 font-black text-base">247247</span>
                 </div>
-
                 <div>
-                  <span className="text-[10px] text-slate-400 block uppercase">Account Number / Reference</span>
-                  <div className="flex items-center gap-1 text-white font-black text-base">
-                    <span>{activeDeposit.accountNo || `KNEX-${(activeDeposit.id || '7789').slice(-6).toUpperCase()}`}</span>
-                    <button 
-                      onClick={() => copyToClipboard(activeDeposit.accountNo || `KNEX-${(activeDeposit.id || '7789').slice(-6).toUpperCase()}`, 'acc')}
-                      className="text-slate-400 hover:text-white p-1 cursor-pointer"
-                    >
-                      {copiedField === 'acc' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
+                  <span className="text-[10px] text-slate-400 block uppercase">Account Number</span>
+                  <span className="text-white font-black text-base">{activeDeposit.accountNo || `KNEX-${(activeDeposit.id || '7789').slice(-6).toUpperCase()}`}</span>
                 </div>
-
                 <div>
-                  <span className="text-[10px] text-slate-400 block uppercase">Amount to Pay</span>
+                  <span className="text-[10px] text-slate-400 block uppercase">USD Amount</span>
                   <span className="text-white font-black text-sm">${activeDeposit.amount} USD</span>
                 </div>
-
                 <div>
-                  <span className="text-[10px] text-slate-400 block uppercase">Approx in Local KES</span>
+                  <span className="text-[10px] text-slate-400 block uppercase">KES Amount</span>
                   <span className="text-yellow-400 font-black text-sm">KES {Math.round(activeDeposit.amount * 132).toLocaleString()}</span>
                 </div>
               </div>
 
-              {/* Step-by-Step Payment Instructions */}
-              <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2 text-xs text-slate-300">
-                <div className="font-bold text-white uppercase text-[10px] tracking-wider text-amber-400">
-                  Step-by-Step Payment Procedure:
-                </div>
-                <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed">
-                  <li>Open <strong>M-Pesa</strong> &gt; Select <strong>Lipa Na M-Pesa</strong> &gt; <strong>Paybill</strong>.</li>
-                  <li>Enter Business No: <strong className="text-emerald-400">247247</strong>.</li>
-                  <li>Enter Account No: <strong className="text-white">{activeDeposit.accountNo || `KNEX-${(activeDeposit.id || '7789').slice(-6).toUpperCase()}`}</strong>.</li>
-                  <li>Enter Amount: <strong className="text-yellow-400">KES {Math.round(activeDeposit.amount * 132).toLocaleString()}</strong> and confirm with your PIN.</li>
-                  <li>Paste the SMS confirmation code or upload the payment screenshot below.</li>
-                </ol>
-              </div>
-
-              {/* Proof Submission Form */}
-              <form onSubmit={handleSubmitDepositProof} className="space-y-4">
+              <form onSubmit={handleSubmitPaybillProof} className="space-y-4 text-xs font-mono">
                 <div>
-                  <label className="text-slate-400 block mb-1 text-xs">
-                    Paste M-Pesa Confirmation SMS / Transaction Code
-                  </label>
+                  <label className="text-slate-400 block mb-1">Paste M-Pesa Confirmation Message / Code</label>
                   <input
                     type="text"
                     value={mpesaCode}
                     onChange={(e) => setMpesaCode(e.target.value)}
-                    placeholder="e.g. QXJ789ABCD Confirmed. Ksh 6,600 sent to 247247..."
+                    placeholder="e.g. QXJ789ABCD Confirmed. Ksh 6,600 sent..."
                     className="w-full bg-[#0b0e11] border border-[#2b313a] rounded-xl px-3.5 py-2.5 text-white font-mono text-xs focus:outline-none focus:border-emerald-500"
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1 text-xs">
-                    Or Upload Payment Screenshot (Receipt)
-                  </label>
+                  <label className="text-slate-400 block mb-1">Or Upload Payment Receipt (Screenshot)</label>
                   <input
                     type="file"
                     accept="image/*"
                     onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
-                    className="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-[11px] file:font-bold file:bg-emerald-500 file:text-slate-950 hover:file:bg-emerald-400 cursor-pointer"
+                    className="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-[11px] file:font-bold file:bg-emerald-500 file:text-slate-950 cursor-pointer"
                   />
                 </div>
 
-                <div className="flex items-center gap-3 pt-2">
+                <div className="flex gap-3 pt-2">
                   <button
                     type="submit"
                     disabled={isProcessing}
-                    className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/10 cursor-pointer transition-all disabled:opacity-50"
+                    className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase rounded-xl cursor-pointer transition-all disabled:opacity-50"
                   >
-                    {isProcessing ? 'Submitting Proof...' : 'Submit Payment for Approval'}
+                    {isProcessing ? 'Submitting...' : 'Submit Payment Proof'}
                   </button>
                   <button
                     type="button"
                     onClick={handleCancelDeposit}
                     disabled={isProcessing}
-                    className="px-4 py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs rounded-xl cursor-pointer transition-all"
+                    className="px-4 py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs rounded-xl cursor-pointer"
                   >
-                    Cancel Deposit
+                    Cancel Order
                   </button>
                 </div>
               </form>
             </div>
+          ) : depositAddress ? (
+            /* Active NOWPayments Crypto Deposit Order Card */
+            <div className="p-6 rounded-2xl bg-[#181a20] border-2 border-yellow-500/40 space-y-5 shadow-2xl animate-fade-in font-mono">
+              <div className="flex items-center justify-between border-b border-[#2b313a] pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-3 w-3 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500"></span>
+                  </span>
+                  <h2 className="text-base font-black text-white">NOWPayments Crypto Deposit</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDepositAddress(null)}
+                  className="px-2 py-1 bg-slate-800 text-slate-300 rounded text-[10px] font-bold cursor-pointer"
+                >
+                  Start Over
+                </button>
+              </div>
+
+              {/* QR Code */}
+              <div className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border max-w-[160px] mx-auto shadow">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(depositAddress.address ?? '')}`}
+                  alt="Crypto Address QR"
+                  className="h-28 w-28 object-contain"
+                />
+                <span className="text-[8px] text-slate-500 font-black uppercase mt-1">SECURE BLOCKCHAIN</span>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-400 block uppercase">Send to {selectedCoin} Address</span>
+                  <div className="flex items-center gap-2 bg-[#0b0e11] p-2.5 rounded-xl border border-[#2b313a]">
+                    <code className="text-yellow-400 truncate flex-1 select-all">{depositAddress.address}</code>
+                    <button
+                      onClick={() => {
+                        if (depositAddress?.address) {
+                          navigator.clipboard.writeText(depositAddress.address);
+                          setCopiedType('address');
+                          setTimeout(() => setCopiedType(null), 2000);
+                        }
+                      }}
+                      className="text-slate-400 hover:text-white px-2 py-1 rounded bg-slate-800 text-[10px] cursor-pointer"
+                    >
+                      {copiedType === 'address' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/25 text-center space-y-1">
+                  <span className="text-[10px] text-slate-400 uppercase block">Exact Amount to Transfer</span>
+                  <span className="text-lg font-black text-yellow-400">{depositAddress.amount} {selectedCoin}</span>
+                  <p className="text-[10px] text-slate-300">Equals exactly ${depositAmount} USD at real-time market rates.</p>
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-xl bg-[#0b0e11] border border-[#2b313a] text-[11px]">
+                  <span className="text-slate-300 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                    {isPolling ? 'Checking blockchain confirmations...' : 'Monitoring payment status...'}
+                  </span>
+                  <span className="text-yellow-400 font-bold">Auto-verifying</span>
+                </div>
+              </div>
+            </div>
           ) : (
-            /* New Deposit Initiation Form */
+            /* Deposit Initiation Form: PayBill vs NOWPayments Crypto */
             <div className="p-6 md:p-8 rounded-2xl bg-[#181a20] border border-[#2b313a] space-y-6 shadow-xl">
               <div className="flex items-center justify-between border-b border-[#2b313a] pb-3">
                 <div className="flex items-center gap-2">
                   <ArrowUpRight className="w-5 h-5 text-emerald-400" />
-                  <h2 className="text-base font-black text-white">Deposit Funds to Real Wallet</h2>
+                  <h2 className="text-base font-black text-white">Deposit Cashier & Payment Gateway</h2>
                 </div>
                 <span className="text-[10px] font-mono text-slate-400">
                   Min: <strong className="text-emerald-400">${minDeposit.toFixed(2)} USD</strong>
                 </span>
               </div>
 
-              <form onSubmit={handleInitiateDeposit} className="space-y-5">
-                {/* Rail Selector */}
-                <div>
-                  <label className="text-slate-400 block mb-2 text-xs font-bold uppercase tracking-wider">
-                    1. Select Payment Rail
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {[
-                      { id: 'paybill', name: 'M-Pesa Paybill', badge: 'Kenya' },
-                      { id: 'usdt', name: 'USDT (TRC20)', badge: 'Crypto' },
-                      { id: 'btc', name: 'Bitcoin (BTC)', badge: 'Crypto' },
-                      { id: 'bank', name: 'Bank Wire', badge: 'Global' }
-                    ].map(rail => (
-                      <button
-                        type="button"
-                        key={rail.id}
-                        onClick={() => setDepositMethod(rail.id as any)}
-                        className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
-                          depositMethod === rail.id 
-                            ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md' 
-                            : 'bg-[#0b0e11] border-[#2b313a] text-slate-400 hover:border-slate-600'
-                        }`}
+              {/* Payment Gateway Method Selector */}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDepositMethod('paybill')}
+                  className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                    depositMethod === 'paybill' 
+                      ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md' 
+                      : 'bg-[#0b0e11] border-[#2b313a] text-slate-400 hover:border-slate-600'
+                  }`}
+                >
+                  <Smartphone className="w-6 h-6 text-emerald-400 shrink-0" />
+                  <div>
+                    <span className="font-black text-xs block text-white">M-Pesa Paybill</span>
+                    <span className="text-[10px] text-slate-400">Instant Kenya Mobile</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDepositMethod('nowpayments')}
+                  className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                    depositMethod === 'nowpayments' 
+                      ? 'bg-yellow-500/10 border-yellow-500 text-white shadow-md' 
+                      : 'bg-[#0b0e11] border-[#2b313a] text-slate-400 hover:border-slate-600'
+                  }`}
+                >
+                  <RefreshCw className="w-6 h-6 text-yellow-400 shrink-0" />
+                  <div>
+                    <span className="font-black text-xs block text-white">NOWPayments Crypto</span>
+                    <span className="text-[10px] text-slate-400">BTC, ETH, USDT Instant</span>
+                  </div>
+                </button>
+              </div>
+
+              {/* Crypto Sub-options if NOWPayments selected */}
+              {depositMethod === 'nowpayments' && (
+                <div className="space-y-4 p-4 rounded-xl bg-[#0b0e11] border border-[#2b313a] animate-fade-in">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Select Cryptocurrency</label>
+                      <select
+                        value={selectedCoin}
+                        onChange={(e) => handleCoinChange(e.target.value)}
+                        className="w-full bg-slate-950 border border-[#2b313a] rounded-xl px-3 py-2.5 text-xs text-white font-bold outline-none cursor-pointer"
                       >
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono block w-max mb-1">
-                          {rail.badge}
-                        </span>
-                        <span className="font-bold text-xs block">{rail.name}</span>
-                      </button>
-                    ))}
+                        <option value="BTC">BTC (Bitcoin)</option>
+                        <option value="ETH">ETH (Ethereum)</option>
+                        <option value="USDT">USDT (ERC20)</option>
+                        <option value="USDTTRC20">USDT (TRC20)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Network</label>
+                      <div className="w-full bg-slate-950 border border-[#2b313a] rounded-xl px-3 py-2.5 text-xs text-yellow-400 font-mono font-bold">
+                        {selectedNetwork} NETWORK
+                      </div>
+                    </div>
                   </div>
                 </div>
+              )}
 
-                {/* Amount Input */}
-                <div>
-                  <div className="flex justify-between items-center text-xs mb-2">
-                    <label className="text-slate-400 font-bold uppercase tracking-wider">
-                      2. Deposit Amount (USD)
-                    </label>
+              {/* Amount Input */}
+              <div>
+                <div className="flex justify-between items-center text-xs mb-2">
+                  <label className="text-slate-400 font-bold uppercase tracking-wider">
+                    Deposit Amount (USD)
+                  </label>
+                  {depositMethod === 'paybill' && (
                     <span className="font-mono text-yellow-400 text-xs">
                       ≈ KES {Math.round(depositAmount * 132).toLocaleString()}
                     </span>
-                  </div>
-                  <div className="relative">
-                    <DollarSign className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="number"
-                      min={minDeposit}
-                      max={50000}
-                      value={depositAmount || ''}
-                      onChange={(e) => setDepositAmount(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-[#0b0e11] border border-[#2b313a] rounded-xl pl-10 pr-4 py-3 text-white font-mono text-lg font-black focus:outline-none focus:border-emerald-500 transition-all"
-                    />
-                  </div>
-
-                  {/* Quick Preset Chips */}
-                  <div className="grid grid-cols-4 gap-2 mt-2.5">
-                    {[20, 50, 100, 250].map(val => (
-                      <button
-                        type="button"
-                        key={val}
-                        onClick={() => setDepositAmount(val)}
-                        className={`py-1.5 rounded-lg border text-xs font-mono font-bold cursor-pointer transition-all ${
-                          depositAmount === val 
-                            ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-black' 
-                            : 'bg-[#0b0e11] border-[#2b313a] text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        ${val}
-                      </button>
-                    ))}
-                  </div>
+                  )}
+                </div>
+                <div className="relative">
+                  <DollarSign className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="number"
+                    min={minDeposit}
+                    max={50000}
+                    value={depositAmount || ''}
+                    onChange={(e) => setDepositAmount(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-[#0b0e11] border border-[#2b313a] rounded-xl pl-10 pr-4 py-3 text-white font-mono text-lg font-black focus:outline-none focus:border-emerald-500 transition-all"
+                  />
                 </div>
 
-                {/* Summary Info */}
-                <div className="p-4 rounded-xl bg-[#0b0e11] border border-[#2b313a] space-y-2 text-xs font-mono text-slate-400">
-                  <div className="flex justify-between">
-                    <span>Deposit Processing Fee:</span>
-                    <span className="text-emerald-400 font-bold">$0.00 (Zero Fee)</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Credit to Real Wallet:</span>
-                    <span className="text-white font-bold">${depositAmount.toFixed(2)} USD</span>
-                  </div>
+                <div className="grid grid-cols-4 gap-2 mt-2.5">
+                  {[20, 50, 100, 250].map(val => (
+                    <button
+                      type="button"
+                      key={val}
+                      onClick={() => setDepositAmount(val)}
+                      className={`py-1.5 rounded-lg border text-xs font-mono font-bold cursor-pointer transition-all ${
+                        depositAmount === val 
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-black' 
+                          : 'bg-[#0b0e11] border-[#2b313a] text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      ${val}
+                    </button>
+                  ))}
                 </div>
+              </div>
 
+              {depositMethod === 'paybill' ? (
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={handleInitiatePaybill}
                   disabled={isProcessing || depositAmount < minDeposit}
                   className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-500/10 cursor-pointer transition-all disabled:opacity-50"
                 >
-                  {isProcessing ? 'Generating Order...' : `Generate Deposit Order for $${depositAmount} USD`}
+                  {isProcessing ? 'Generating Paybill Order...' : `Generate Paybill Order for $${depositAmount} USD`}
                 </button>
-              </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleGenerateCryptoAddress}
+                  disabled={isAddressLoading || depositAmount < minDeposit}
+                  className="w-full py-3.5 bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-yellow-500/10 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isAddressLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Generating Secure Address...</span>
+                    </>
+                  ) : (
+                    <span>Generate {selectedCoin} Deposit Instructions</span>
+                  )}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -822,7 +858,6 @@ export default function FinanceDashboard({
           </div>
 
           <form onSubmit={handleWithdrawSubmit} className="space-y-5">
-            {/* Rail Selector */}
             <div>
               <label className="text-slate-400 block mb-2 text-xs font-bold uppercase tracking-wider">
                 1. Select Payout Rail
@@ -853,7 +888,6 @@ export default function FinanceDashboard({
               </div>
             </div>
 
-            {/* Crypto Coin sub-selection */}
             {withdrawMethod === 'crypto' && (
               <div>
                 <label className="text-slate-400 block mb-1 text-xs font-bold uppercase tracking-wider">
@@ -871,7 +905,6 @@ export default function FinanceDashboard({
               </div>
             )}
 
-            {/* Destination Input */}
             <div>
               <label className="text-slate-400 block mb-1 text-xs font-bold uppercase tracking-wider">
                 2. Destination {withdrawMethod === 'mpesa' ? 'M-Pesa Phone Number' : withdrawMethod === 'crypto' ? 'Wallet Address' : 'Account Details'}
@@ -891,7 +924,6 @@ export default function FinanceDashboard({
               />
             </div>
 
-            {/* Amount Input */}
             <div>
               <div className="flex justify-between items-center text-xs mb-2">
                 <label className="text-slate-400 font-bold uppercase tracking-wider">
@@ -913,7 +945,6 @@ export default function FinanceDashboard({
                 />
               </div>
 
-              {/* Quick Percentage Selectors */}
               <div className="grid grid-cols-4 gap-2 mt-2.5">
                 {[
                   { label: `Min ($${minWithdrawal})`, val: minWithdrawal },
@@ -933,20 +964,6 @@ export default function FinanceDashboard({
               </div>
             </div>
 
-            {/* Summary & Disclaimers */}
-            <div className="p-4 rounded-xl bg-[#0b0e11] border border-[#2b313a] space-y-2 text-xs font-mono text-slate-400">
-              <div className="flex justify-between">
-                <span>Withdrawal Speed:</span>
-                <span className="text-white font-bold">Direct Ledger Settlement (&lt; 15 mins)</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Remaining Real Balance:</span>
-                <span className="text-emerald-400 font-bold">
-                  ${Math.max(0, realBalance - withdrawAmount).toFixed(2)} USD
-                </span>
-              </div>
-            </div>
-
             <button
               type="submit"
               disabled={isProcessing || withdrawAmount < minWithdrawal || withdrawAmount > realBalance || !withdrawDestination.trim()}
@@ -961,7 +978,6 @@ export default function FinanceDashboard({
       {/* ================= TAB 4: TRANSACTION STATEMENTS ================= */}
       {activeTab === 'statements' && (
         <div className="space-y-4">
-          {/* Statement Controls */}
           <div className="p-4 rounded-2xl bg-[#181a20] border border-[#2b313a] flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <button
@@ -1001,7 +1017,6 @@ export default function FinanceDashboard({
               <button
                 onClick={handleExportCSV}
                 className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                title="Export CSV"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Export CSV</span>
@@ -1009,7 +1024,6 @@ export default function FinanceDashboard({
             </div>
           </div>
 
-          {/* Statement Table */}
           <div className="p-4 md:p-6 rounded-2xl bg-[#181a20] border border-[#2b313a] overflow-x-auto">
             {isLoadingHistory ? (
               <div className="flex items-center justify-center py-12 text-slate-400 gap-2">
@@ -1026,7 +1040,7 @@ export default function FinanceDashboard({
                 <thead>
                   <tr className="border-b border-[#2b313a] text-slate-400 text-[10px] uppercase tracking-wider">
                     <th className="pb-3 font-bold">Date & Time</th>
-                    <th className="pb-3 font-bold">Transaction Type</th>
+                    <th className="pb-3 font-bold">Type</th>
                     <th className="pb-3 font-bold">Payment Rail</th>
                     <th className="pb-3 font-bold">Amount</th>
                     <th className="pb-3 font-bold">Status</th>
@@ -1046,12 +1060,8 @@ export default function FinanceDashboard({
                           {tx.type}
                         </span>
                       </td>
-                      <td className="py-3 text-white font-bold">
-                        {tx.method}
-                      </td>
-                      <td className={`py-3 font-black text-sm ${
-                        tx.type === 'deposit' ? 'text-emerald-400' : 'text-rose-400'
-                      }`}>
+                      <td className="py-3 text-white font-bold">{tx.method}</td>
+                      <td className={`py-3 font-black text-sm ${tx.type === 'deposit' ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {tx.type === 'deposit' ? '+' : '-'}${tx.amount.toFixed(2)}
                       </td>
                       <td className="py-3">

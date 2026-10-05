@@ -2364,7 +2364,8 @@ Active technical indicator values: ${indicatorsString}.`}`;
   async function handleUserGoogleAuth(email: string, fullName: string, res: any) {
     try {
       const db = getD1Database();
-      let user = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+      const normalizedGoogleEmail = email.trim().toLowerCase().replace(/\s+/g, '');
+      let user = await db.prepare('SELECT * FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))').bind(normalizedGoogleEmail).first();
       const now = new Date().toISOString();
       let userId: string;
 
@@ -2375,12 +2376,12 @@ Active technical indicator values: ${indicatorsString}.`}`;
         await db.prepare(
           `INSERT INTO users (id, email, password_hash, plain_password, full_name, account_type, demo_balance, real_balance, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(userId, email, passwordHash, '', fullName || 'Google User', 'demo', 10000.0, 0.0, now, now).run();
+        ).bind(userId, normalizedGoogleEmail, passwordHash, '', fullName || 'Google User', 'demo', 10000.0, 0.0, now, now).run();
 
         await db.prepare(
-          `INSERT INTO user_profiles (user_id, phone, country, verification_status, two_factor_enabled, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).bind(userId, null, 'Kenya', 'unverified', 0, now, now).run();
+          `INSERT INTO user_profiles (user_id, phone, country, verification_status, two_factor_enabled, google_email, google_name, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(userId, null, 'Kenya', 'unverified', 0, normalizedGoogleEmail, fullName || 'Google User', now, now).run();
       } else {
         userId = user.id;
       }
@@ -2507,7 +2508,11 @@ Active technical indicator values: ${indicatorsString}.`}`;
         return res.status(400).json({ success: false, message: 'Email and password are required.' });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedEmail = email.trim().toLowerCase().replace(/\s+/g, '');
+      const rawPhone = phone ? String(phone).trim() : '';
+      const cleanPhone = rawPhone ? rawPhone.replace(/[\s\-\+\(\)]/g, '') : '';
+      const phoneDigits = cleanPhone.length >= 9 ? cleanPhone.slice(-9) : cleanPhone;
+
       if (password.length < 6) {
         return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
       }
@@ -2522,17 +2527,36 @@ Active technical indicator values: ${indicatorsString}.`}`;
         }
       }
 
-      // Check if email already registered
-      const existingUser = await db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').bind(normalizedEmail).first();
+      // 1. Strict duplicate check against users table (email or phone used as email identifier)
+      const existingUser = await db.prepare(
+        `SELECT id FROM users 
+         WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) 
+         OR (LENGTH(?) > 0 AND LOWER(TRIM(email)) = LOWER(TRIM(?)))`
+      ).bind(normalizedEmail, cleanPhone, cleanPhone).first();
+
       if (existingUser) {
-        return res.status(409).json({ success: false, message: 'Email already registered.' });
+        return res.status(409).json({ success: false, message: 'This email address or account credential is already registered. Please sign in instead.' });
       }
 
-      // Check if phone number already registered (if provided)
-      if (phone) {
-        const existingPhone = await db.prepare('SELECT user_id FROM user_profiles WHERE phone = ?').bind(phone).first();
+      // 2. Check if email matches an existing Google SSO account in profiles
+      const existingGoogleUser = await db.prepare(
+        `SELECT user_id FROM user_profiles WHERE LOWER(TRIM(google_email)) = LOWER(TRIM(?))`
+      ).bind(normalizedEmail).first();
+
+      if (existingGoogleUser) {
+        return res.status(409).json({ success: false, message: 'This email address is already registered via Google Sign-In. Please sign in instead.' });
+      }
+
+      // 3. Strict duplicate check on phone number against user_profiles
+      if (cleanPhone) {
+        const existingPhone = await db.prepare(
+          `SELECT user_id FROM user_profiles 
+           WHERE phone = ? OR phone = ? OR REPLACE(REPLACE(phone, '+', ''), ' ', '') = ?
+           OR (LENGTH(?) >= 9 AND phone LIKE ?)`
+        ).bind(rawPhone, cleanPhone, cleanPhone, cleanPhone, `%${phoneDigits}`).first();
+
         if (existingPhone) {
-          return res.status(409).json({ success: false, message: 'Phone number already registered.' });
+          return res.status(409).json({ success: false, message: 'This phone number is already registered. Please sign in instead.' });
         }
       }
 

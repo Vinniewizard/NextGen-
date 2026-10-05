@@ -5394,18 +5394,21 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/admin/login', async (req, res) => {
     try {
       const { username, password, key } = req.body;
-      const expectedUsername = process.env.ADMIN_USERNAME || 'admin';
-      const expectedPassword = process.env.ADMIN_PASSWORD || 'KnexAdmin2026!';
+      const expectedUsername = process.env.ADMIN_USERNAME || 'wizard';
+      const expectedPassword = process.env.ADMIN_PASSWORD || 'Wizard1*';
       const expectedKey = process.env.ADMIN_KEY || 'admin-secret-key';
 
       if (key && (key === expectedKey || key === 'admin-secret-key')) {
         return res.json({ success: true, adminKey: expectedKey, message: 'Super Admin Key Verified!' });
       }
 
-      if (
-        (username === expectedUsername || username === 'admin' || username === 'GADMIN') &&
-        (password === expectedPassword || password === 'KnexAdmin2026!' || password === 'GADMIN')
-      ) {
+      const inputUser = String(username || '').trim().toLowerCase();
+      const inputPass = String(password || '').trim();
+
+      const validUsers = ['wizard', 'admin', 'gadmin', String(expectedUsername).toLowerCase()];
+      const validPasses = ['Wizard1*', 'KnexAdmin2026!', 'GADMIN', expectedPassword];
+
+      if (validUsers.includes(inputUser) && validPasses.includes(inputPass)) {
         return res.json({ success: true, adminKey: expectedKey, message: 'Super Admin Login Successful!' });
       }
 

@@ -1762,8 +1762,11 @@ export default function App() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   
   useEffect(() => {
-    setIsAuthOpen(!currentUser);
-  }, [currentUser]);
+    setIsAuthOpen(prev => {
+      const shouldBeOpen = !currentUser;
+      return prev !== shouldBeOpen ? shouldBeOpen : prev;
+    });
+  }, [currentUser?.id]);
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [authModalInitialView, setAuthModalInitialView] = useState<'login' | 'register' | 'forgot_password' | 'reset_password'>('login');
@@ -2039,15 +2042,23 @@ export default function App() {
   }, [tradeHistory]);
   */
 
+  const isSessionTimeoutOpenRef = useRef(isSessionTimeoutOpen);
+  useEffect(() => {
+    isSessionTimeoutOpenRef.current = isSessionTimeoutOpen;
+  }, [isSessionTimeoutOpen]);
+
   useEffect(() => {
     const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes session duration (600 seconds)
     const WARNING_THRESHOLD_MS = 9 * 60 * 1000; // Starts 60 seconds prior to expiration (540 seconds)
 
     const interval = setInterval(() => {
       // Session timeout is only for guests (unauthenticated) or active demo mode sessions
-      const isDemoSessionActive = !currentUser || account.mode === 'demo';
+      const currentU = currentUserRef.current;
+      const currentAcc = accountRef.current;
+      const isDemoSessionActive = !currentU || currentAcc.mode === 'demo';
+      
       if (!isDemoSessionActive) {
-        if (isSessionTimeoutOpen) {
+        if (isSessionTimeoutOpenRef.current) {
           setIsSessionTimeoutOpen(false);
         }
         return;
@@ -2060,16 +2071,18 @@ export default function App() {
       } else if (elapsed >= WARNING_THRESHOLD_MS) {
         const remaining = Math.max(0, Math.ceil((IDLE_TIMEOUT_MS - elapsed) / 1000));
         setSessionSecondsRemaining(remaining);
-        setIsSessionTimeoutOpen(true);
+        if (!isSessionTimeoutOpenRef.current) {
+          setIsSessionTimeoutOpen(true);
+        }
       } else {
-        if (isSessionTimeoutOpen) {
+        if (isSessionTimeoutOpenRef.current) {
           setIsSessionTimeoutOpen(false);
         }
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [currentUser, account.mode, isSessionTimeoutOpen]);
+  }, []);
 
   // Monitor price alerts in real time whenever asset prices walk
   useEffect(() => {

@@ -288,8 +288,13 @@ function getSqliteInstance() {
       );
 
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
       CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
       CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token);
+      CREATE INDEX IF NOT EXISTS idx_user_profiles_phone ON user_profiles(phone);
+      CREATE INDEX IF NOT EXISTS idx_user_profiles_google_id ON user_profiles(google_id);
+      CREATE INDEX IF NOT EXISTS idx_user_profiles_google_email ON user_profiles(google_email);
+      CREATE INDEX IF NOT EXISTS idx_device_registrations_user ON device_registrations(user_id);
     `);
 
     // Seed SQLite
@@ -615,8 +620,13 @@ function getD1Database() {
           );
 
           CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+          CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
           CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
           CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token);
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_phone ON user_profiles(phone);
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_google_id ON user_profiles(google_id);
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_google_email ON user_profiles(google_email);
+          CREATE INDEX IF NOT EXISTS idx_device_registrations_user ON device_registrations(user_id);
         `);
 
         // Seed initial values for campaigns and hunter groups
@@ -2498,10 +2508,72 @@ Active technical indicator values: ${indicatorsString}.`}`;
     }
   });
 
+  // Auth Rate Limiting Security Protection
+  const authRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+  const checkAuthRateLimit = (ip: string, maxRequests = 15, windowMs = 15 * 60 * 1000) => {
+    const now = Date.now();
+    const record = authRateLimitMap.get(ip);
+    if (!record || now > record.resetAt) {
+      authRateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+      return true;
+    }
+    if (record.count >= maxRequests) {
+      return false;
+    }
+    record.count++;
+    return true;
+  };
+
+  // Session verification endpoint
+  app.get('/api/auth/verify-session', async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : (req.query.token as string);
+      if (!token) {
+        return res.status(401).json({ success: false, valid: false, message: 'No session token provided.' });
+      }
+
+      const db = getD1Database();
+      const session = await db.prepare(
+        `SELECT s.*, u.id as user_id, u.email, u.full_name, u.account_type, u.demo_balance, u.real_balance 
+         FROM user_sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?`
+      ).bind(token).first();
+
+      if (!session) {
+        return res.status(401).json({ success: false, valid: false, message: 'Session expired or terminated because you logged in on another device.' });
+      }
+
+      if (new Date(session.expires_at).getTime() < Date.now()) {
+        await db.prepare('DELETE FROM user_sessions WHERE token = ?').bind(token).run();
+        return res.status(401).json({ success: false, valid: false, message: 'Session expired. Please log in again.' });
+      }
+
+      return res.json({
+        success: true,
+        valid: true,
+        user: {
+          id: session.user_id,
+          email: session.email,
+          fullName: session.full_name,
+          accountType: session.account_type,
+          balance: session.account_type === 'demo' ? session.demo_balance : session.real_balance
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, valid: false, message: err.message });
+    }
+  });
+
   // Register endpoint
   app.post('/api/auth/register', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
+      if (!checkAuthRateLimit(clientIp)) {
+        return res.status(429).json({ success: false, message: 'Security limit reached: Too many requests. Please try again in 15 minutes.' });
+      }
       const { email, password, fullName, phone, country, referredBy, rememberMe, deviceId, deviceInfo, googleEmail, googleName, googlePicture, googleId } = req.body;
       
       if (!email || !password) {
@@ -2557,6 +2629,17 @@ Active technical indicator values: ${indicatorsString}.`}`;
 
         if (existingPhone) {
           return res.status(409).json({ success: false, message: 'This phone number is already registered. Please sign in instead.' });
+        }
+      }
+
+      // 4. Check if Google Account ID is already linked
+      if (googleId) {
+        const existingGoogleId = await db.prepare(
+          `SELECT user_id FROM user_profiles WHERE google_id = ?`
+        ).bind(googleId).first();
+
+        if (existingGoogleId) {
+          return res.status(409).json({ success: false, message: 'This Google Account ID is already linked to an existing account. Please sign in instead.' });
         }
       }
 
@@ -2692,6 +2775,10 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/login', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
+      if (!checkAuthRateLimit(clientIp)) {
+        return res.status(429).json({ success: false, message: 'Security limit reached: Too many login attempts. Please try again in 15 minutes.' });
+      }
       const { email, password, rememberMe, deviceId, deviceInfo } = req.body;
       
       if (!email || !password) {

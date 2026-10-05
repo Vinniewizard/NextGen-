@@ -40,7 +40,9 @@ export default function P2PEscrowTradeRoom({
 }: P2PEscrowTradeRoomProps) {
   const [chatInput, setChatInput] = useState('');
   const [timeLeft, setTimeLeft] = useState('15:00');
+  const [timerPercent, setTimerPercent] = useState(100);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [zoomImage, setZoomImage] = useState<string | null>(null);
 
   // Modals
   const [showMarkPaidModal, setShowMarkPaidModal] = useState(false);
@@ -51,6 +53,7 @@ export default function P2PEscrowTradeRoom({
   const [disputeDetails, setDisputeDetails] = useState('');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUserBuyer = currentUser && trade.buyer_id === currentUser.id;
   const isUserSeller = currentUser && trade.seller_id === currentUser.id;
@@ -60,6 +63,7 @@ export default function P2PEscrowTradeRoom({
     // When order is marked as Paid, it NEVER expires or auto-cancels
     if (trade.status !== 'open') {
       setTimeLeft(trade.status === 'paid' ? 'Protected' : trade.status);
+      setTimerPercent(0);
       return;
     }
 
@@ -69,10 +73,12 @@ export default function P2PEscrowTradeRoom({
       const remaining = expires - Date.now();
       if (remaining <= 0) {
         setTimeLeft('Expired');
+        setTimerPercent(0);
       } else {
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
         setTimeLeft(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
+        setTimerPercent(Math.max(0, Math.min(100, (remaining / (15 * 60 * 1000)) * 100)));
       }
     };
 
@@ -91,6 +97,43 @@ export default function P2PEscrowTradeRoom({
     setCopiedField(fieldName);
     onTriggerToast(`Copied ${fieldName} to clipboard!`, true);
     setTimeout(() => setCopiedField(null), 2500);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result) {
+        onSendChat(`📷 [Proof of Payment Attached]\n[IMG]${reader.result}[/IMG]`);
+        onTriggerToast('Proof of payment image attached to chat!', true);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const renderMessageContent = (text: string) => {
+    if (text.includes('[IMG]') && text.includes('[/IMG]')) {
+      const parts = text.split(/\[IMG\]|\[\/IMG\]/);
+      const textBefore = parts[0];
+      const imgUrl = parts[1];
+      const textAfter = parts[2] || '';
+      return (
+        <div className="space-y-1.5">
+          {textBefore && <div>{textBefore}</div>}
+          {imgUrl && (
+            <img 
+              src={imgUrl} 
+              alt="Payment proof attachment" 
+              onClick={() => setZoomImage(imgUrl)}
+              className="max-w-[220px] max-h-[180px] rounded-lg border border-slate-700 cursor-pointer hover:opacity-90 object-cover shadow"
+            />
+          )}
+          {textAfter && <div>{textAfter}</div>}
+        </div>
+      );
+    }
+    return <div>{text}</div>;
   };
 
   const handleSendMessage = (e: React.FormEvent) => {
@@ -387,7 +430,7 @@ export default function P2PEscrowTradeRoom({
                     <div className="text-[9px] font-mono opacity-70 mb-0.5">
                       {isMe ? 'You' : isMerchant ? 'Verified Merchant' : (msg.senderEmail || 'Counterparty')}
                     </div>
-                    <div>{msg.text}</div>
+                    {renderMessageContent(msg.text)}
                   </div>
                   <span className="text-[9px] font-mono text-slate-500 mt-1 px-1">
                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -419,11 +462,26 @@ export default function P2PEscrowTradeRoom({
 
           {/* Chat Form */}
           <form onSubmit={handleSendMessage} className="p-3 border-t border-[#2b313a] bg-[#1e2329]/60 flex items-center gap-2">
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleImageUpload} 
+              accept="image/*" 
+              className="hidden" 
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2 bg-[#2b313a] hover:bg-[#363d47] text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer"
+              title="Attach Payment Proof Screenshot"
+            >
+              <ImageIcon className="w-4 h-4" />
+            </button>
             <input
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Type message to counterparty..."
+              placeholder="Type message or attach proof..."
               className="flex-1 bg-[#0b0e11] border border-[#2b313a] rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#fcd535]"
             />
             <button
@@ -590,6 +648,26 @@ export default function P2PEscrowTradeRoom({
                 {isSubmitting ? 'Cancelling...' : 'Confirm Cancel Order'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Resolution Image Attachment Zoom Modal */}
+      {zoomImage && (
+        <div className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="relative max-w-4xl w-full max-h-[90vh] flex flex-col items-center justify-center">
+            <button
+              onClick={() => setZoomImage(null)}
+              className="absolute -top-10 right-0 p-2 text-slate-300 hover:text-white bg-slate-800/80 rounded-full cursor-pointer"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <img 
+              src={zoomImage} 
+              alt="Full Resolution Proof" 
+              className="max-w-full max-h-[80vh] rounded-xl object-contain border border-slate-700 shadow-2xl"
+            />
+            <p className="text-xs font-mono text-slate-400 mt-3">Proof of Payment Attachment · Inspect Details</p>
           </div>
         </div>
       )}

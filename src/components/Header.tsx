@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ShieldCheck, 
   Coins, 
@@ -50,28 +50,28 @@ export default function Header({
   currentUser
 }: HeaderProps) {
   const [time, setTime] = useState(new Date());
-  const [prevBalance, setPrevBalance] = useState<number>(account.balance);
-  const [prevMode, setPrevMode] = useState<'demo' | 'real'>(account.mode);
+  const prevBalanceRef = useRef<number>(account.balance);
+  const prevModeRef = useRef<'demo' | 'real'>(account.mode);
   const [flashType, setFlashType] = useState<'increase' | 'decrease' | null>(null);
   const [flashKey, setFlashKey] = useState<number>(0);
 
   useEffect(() => {
-    if (prevMode !== account.mode) {
-      setPrevMode(account.mode);
-      setPrevBalance(account.balance);
+    if (prevModeRef.current !== account.mode) {
+      prevModeRef.current = account.mode;
+      prevBalanceRef.current = account.balance;
       setFlashType(null);
-    } else if (account.balance !== prevBalance) {
-      const type = account.balance > prevBalance ? 'increase' : 'decrease';
+    } else if (account.balance !== prevBalanceRef.current) {
+      const type = account.balance > prevBalanceRef.current ? 'increase' : 'decrease';
       setFlashType(type);
       setFlashKey(prev => prev + 1);
-      setPrevBalance(account.balance);
+      prevBalanceRef.current = account.balance;
 
       const timer = setTimeout(() => {
         setFlashType(null);
       }, 700);
       return () => clearTimeout(timer);
     }
-  }, [account.balance, account.mode, prevBalance, prevMode]);
+  }, [account.balance, account.mode]);
 
   useEffect(() => {
     const timer = setInterval(() => {

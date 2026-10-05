@@ -73,7 +73,7 @@ export default function TradeControls({
     } else {
       setBarrierOffset(0.5);
     }
-  }, [selectedAsset]);
+  }, [selectedAsset?.id]);
 
   if (!selectedAsset) return null;
 

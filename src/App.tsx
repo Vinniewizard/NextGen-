@@ -162,6 +162,28 @@ export default function App() {
     return null;
   });
 
+  // Validate session against database on startup
+  useEffect(() => {
+    const token = localStorage.getItem('lwex_token');
+    if (token) {
+      fetch('/api/auth/verify-session', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.success && data.user) {
+          setCurrentUser(data.user);
+          localStorage.setItem('lwex_current_user', JSON.stringify(data.user));
+        } else if (data && data.valid === false) {
+          setCurrentUser(null);
+          localStorage.removeItem('lwex_current_user');
+          localStorage.removeItem('lwex_token');
+        }
+      })
+      .catch(err => console.warn('Session verification notice:', err?.message || err));
+    }
+  }, []);
+
   // Track platform visits & referrer routing
   useEffect(() => {
     const logVisit = async () => {
@@ -2051,7 +2073,10 @@ export default function App() {
 
   // Monitor price alerts in real time whenever asset prices walk
   useEffect(() => {
-    priceAlerts.forEach((alert) => {
+    const alerts = priceAlertsRef.current;
+    if (!alerts || alerts.length === 0) return;
+
+    alerts.forEach((alert) => {
       if (alert.isTriggered) return;
 
       const ticks = assetsTicksMap[alert.assetId] || [];
@@ -2066,8 +2091,8 @@ export default function App() {
           prev.map((a) => (a.id === alert.id ? { ...a, isTriggered: true } : a))
         );
 
-        const assetItem = assetsRegistry.find((a) => a.id === alert.assetId) || activeAsset;
-        const decimals = assetItem.decimals ?? 2;
+        const assetItem = ASSETSList.find((a) => a.id === alert.assetId) || activeAsset;
+        const decimals = assetItem?.decimals ?? 2;
 
         triggerToast(
           `🔔 ALERT: ${alert.assetSymbol} reached target of ${(alert.targetPrice ?? 0).toFixed(decimals)}! Current Spot: ${(latestPrice ?? 0).toFixed(decimals)}.`,
@@ -2077,16 +2102,16 @@ export default function App() {
         playAlertSound();
 
         // Check if email notification was requested
-        if (alert.notifyEmail && currentUser?.email) {
+        if (alert.notifyEmail && currentUserRef.current?.email) {
           fetch('/api/alerts/notify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: currentUser.email, alert, latestPrice })
+            body: JSON.stringify({ email: currentUserRef.current.email, alert, latestPrice })
           }).catch(err => console.warn('Notice alert notification dispatch:', err?.message || err));
         }
       }
     });
-  }, [assetsTicksMap, priceAlerts, assetsRegistry, activeAsset, currentUser]);
+  }, [assetsTicksMap]);
 
   const handleAddPriceAlert = (targetPrice: number, condition: 'above' | 'below', notifyEmail: boolean = false) => {
     const newAlert: PriceAlert = {

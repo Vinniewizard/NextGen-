@@ -2551,8 +2551,13 @@ Active technical indicator values: ${indicatorsString}.`}`;
 
       const db = getD1Database();
       const session = await db.prepare(
-        `SELECT s.*, u.id as user_id, u.email, u.full_name, u.account_type, u.demo_balance, u.real_balance 
-         FROM user_sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?`
+        `SELECT s.*, u.id as user_id, u.email, u.full_name, u.account_type, u.demo_balance, u.real_balance,
+                u.force_outcome, u.profit_target, u.max_win_limit, u.max_loss_limit,
+                up.phone, up.country, up.verification_status
+         FROM user_sessions s 
+         JOIN users u ON s.user_id = u.id 
+         LEFT JOIN user_profiles up ON u.id = up.user_id 
+         WHERE s.token = ?`
       ).bind(token).first();
 
       if (!session) {
@@ -2571,8 +2576,17 @@ Active technical indicator values: ${indicatorsString}.`}`;
           id: session.user_id,
           email: session.email,
           fullName: session.full_name,
-          accountType: session.account_type,
-          balance: session.account_type === 'demo' ? session.demo_balance : session.real_balance
+          phone: session.phone || '',
+          country: session.country || 'Kenya',
+          verificationStatus: session.verification_status || 'unverified',
+          accountType: session.account_type || 'demo',
+          balance: session.account_type === 'demo' ? (session.demo_balance || 10000.0) : (session.real_balance || 0.0),
+          demo_balance: session.demo_balance || 10000.0,
+          real_balance: session.real_balance || 0.0,
+          forceOutcome: session.force_outcome || '',
+          profitTarget: session.profit_target || 0.0,
+          maxWinLimit: session.max_win_limit || 0.0,
+          maxLossLimit: session.max_loss_limit || 0.0
         }
       });
     } catch (err: any) {

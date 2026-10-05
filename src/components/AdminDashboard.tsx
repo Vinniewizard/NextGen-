@@ -768,19 +768,32 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
     }
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    let finalKey = adminKey;
-    if (loginMethod === 'creds') {
-      if (username.trim() === 'GADMIN' && password.trim() === 'GADMIN') {
-        finalKey = 'admin-secret-key';
-        setAdminKey('admin-secret-key');
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username.trim(),
+          password: password.trim(),
+          key: adminKey.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.adminKey) {
+        setAdminKey(data.adminKey);
+        fetchData(data.adminKey);
+        triggerToast('Super Admin Session Authenticated!', true);
       } else {
-        triggerToast('Invalid GADMIN Credentials. Access denied.', false);
-        return;
+        triggerToast(data.message || 'Invalid Admin Credentials or Security Key.', false);
       }
+    } catch (err: any) {
+      triggerToast('Admin Authentication Error: ' + err.message, false);
+    } finally {
+      setLoading(false);
     }
-    fetchData(finalKey);
   };
 
   const handlePinNotification = async (messageId: string) => {

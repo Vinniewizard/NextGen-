@@ -9,6 +9,7 @@ interface P2POrderRowProps {
   onToggleExpand: () => void;
   onOpenModal?: (order: P2POrder) => void;
   onInitiateTrade: (order: P2POrder, cryptoAmount: number) => Promise<void>;
+  onViewMerchantProfile?: (merchantId: string, merchantName: string) => void;
   userBalance: number;
   currentUser: any;
   isSubmitting: boolean;
@@ -22,6 +23,7 @@ export default function P2POrderRow({
   onToggleExpand,
   onOpenModal,
   onInitiateTrade,
+  onViewMerchantProfile,
   userBalance,
   currentUser,
   isSubmitting,
@@ -141,9 +143,16 @@ export default function P2POrderRow({
       <div className="p-4 md:px-6 md:py-4 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-center">
         
         {/* 1. Advertiser Column */}
-        <div className="md:col-span-4 flex items-start gap-3">
+        <div 
+          className="md:col-span-4 flex items-start gap-3 cursor-pointer group"
+          onClick={() => {
+            if (onViewMerchantProfile) {
+              onViewMerchantProfile(order.user_id, mName);
+            }
+          }}
+        >
           <div className="relative shrink-0">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#2b313a] to-[#363d47] border border-slate-600 flex items-center justify-center font-bold text-white text-sm">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#2b313a] to-[#363d47] border border-slate-600 flex items-center justify-center font-bold text-white text-sm group-hover:border-[#fcd535] transition-colors">
               {mName.substring(0, 2).toUpperCase()}
             </div>
             <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#181a20]" />
@@ -151,7 +160,7 @@ export default function P2POrderRow({
 
           <div className="space-y-0.5 min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="font-bold text-sm text-white truncate hover:text-[#fcd535] cursor-pointer">
+              <span className="font-bold text-sm text-white truncate group-hover:text-[#fcd535] transition-colors">
                 {mName}
               </span>
               {order.is_verified ? (

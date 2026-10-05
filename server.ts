@@ -88,6 +88,16 @@ function getSqliteInstance() {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS p2p_notifications (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        type TEXT DEFAULT 'info',
+        is_read INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
@@ -3436,9 +3446,91 @@ Active technical indicator values: ${indicatorsString}.`}`;
         }, 3500);
       }
       
+      // Create immediate notifications for seller and buyer
+      try {
+        const notifIdSeller = crypto.randomUUID();
+        const notifSellerTitle = `⚡ NEW P2P TRADE INITIATED!`;
+        const notifSellerMsg = `Trade #${tradeId.substring(0, 8)} opened! A trader has initiated a ${order.type === 'sell' ? 'buy' : 'sell'} order for ${tradeAmount} ${coin} @ ${tradePrice} ${fiatSymbol}. Escrow is locked.`;
+
+        await db.prepare(`
+          INSERT INTO p2p_notifications (id, user_id, title, message, type, is_read, created_at)
+          VALUES (?, ?, ?, ?, 'trade_initiated', 0, ?)
+        `).bind(notifIdSeller, seller_id, notifSellerTitle, notifSellerMsg, now).run();
+
+        const notifIdBuyer = crypto.randomUUID();
+        const notifBuyerTitle = `✅ P2P Escrow Order Created`;
+        const notifBuyerMsg = `Trade #${tradeId.substring(0, 8)} initialized. ${tradeAmount} ${coin} locked in escrow. Transfer ${fiatTotal} ${fiatSymbol} and mark paid.`;
+
+        await db.prepare(`
+          INSERT INTO p2p_notifications (id, user_id, title, message, type, is_read, created_at)
+          VALUES (?, ?, ?, ?, 'trade_initiated', 0, ?)
+        `).bind(notifIdBuyer, buyer_id, notifBuyerTitle, notifBuyerMsg, now).run();
+      } catch (notifErr) {
+        console.warn('Failed to dispatch P2P trade notification:', notifErr);
+      }
+
       return res.json({ success: true, tradeId });
     } catch (e: any) {
       return res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  // Profile View Notification Route
+  app.post('/api/p2p/profile/view', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const viewerId = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : 'guest';
+      const { sellerId, merchantName } = req.body;
+      if (!sellerId) return res.status(400).json({ success: false, message: 'sellerId is required' });
+
+      const db = getD1Database();
+      let viewerName = 'A potential P2P trader';
+      if (viewerId !== 'guest') {
+        const viewerUser = await db.prepare('SELECT email, full_name FROM users WHERE id = ?').bind(viewerId).first() as any;
+        if (viewerUser) {
+          viewerName = viewerUser.full_name || viewerUser.email || viewerName;
+        }
+      }
+
+      const notifId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const title = `👀 Merchant Profile View Alert`;
+      const message = `P2P Alert: ${viewerName} is currently viewing your merchant profile (${merchantName || 'Your Profile'})! Be ready for upcoming trade orders.`;
+
+      await db.prepare(`
+        INSERT INTO p2p_notifications (id, user_id, title, message, type, is_read, created_at)
+        VALUES (?, ?, ?, ?, 'profile_view', 0, ?)
+      `).bind(notifId, sellerId, title, message, now).run();
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // P2P Unread Notifications Route
+  app.get('/api/p2p/notifications', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const userId = authHeader.split(' ')[1];
+
+      const db = getD1Database();
+      const notifications = await db.prepare(
+        `SELECT * FROM p2p_notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT 10`
+      ).bind(userId).all();
+
+      const rows = notifications.results || notifications || [];
+
+      if (rows.length > 0) {
+        for (const notif of rows) {
+          await db.prepare(`UPDATE p2p_notifications SET is_read = 1 WHERE id = ?`).bind(notif.id).run();
+        }
+      }
+
+      return res.json({ success: true, notifications: rows });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
     }
   });
 

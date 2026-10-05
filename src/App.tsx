@@ -1580,7 +1580,7 @@ export default function App() {
   const [baseMartingaleStake, setBaseMartingaleStake] = useState<number>(10);
   const [autoCashoutPercent, setAutoCashoutPercent] = useState<number>(0); // 0 = disabled, 50, 75, 90
   const [autoDismissSettlement, setAutoDismissSettlement] = useState<boolean>(false);
-  const [hotkeysEnabled, setHotkeysEnabled] = useState<boolean>(true);
+  const [hotkeysEnabled, setHotkeysEnabled] = useState<boolean>(false);
   const [showHotkeysModal, setShowHotkeysModal] = useState<boolean>(false);
   const [showValidationChecklist, setShowValidationChecklist] = useState<boolean>(false);
   const [proPlayGridModal, setProPlayGridModal] = useState<ContractType | null>(null);

@@ -118,16 +118,42 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate, o
     return () => clearInterval(timer);
   }, [currentUser]);
 
-  // Trade Room Live Polling
+  // Poll P2P notifications every 3 seconds for instant merchant view & trade alerts
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (currentTrade) {
-      interval = setInterval(() => {
-        refreshCurrentTrade(currentTrade.id);
-      }, 3000);
-    }
-    return () => clearInterval(interval);
-  }, [currentTrade?.id]);
+    const checkNotifications = async () => {
+      const token = localStorage.getItem('lwex_token');
+      if (!token) return;
+
+      try {
+        const res = await fetch('/api/p2p/notifications', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await res.json();
+        if (data.success && Array.isArray(data.notifications) && data.notifications.length > 0) {
+          data.notifications.forEach((notif: any) => {
+            triggerToast(`${notif.title}\n${notif.message}`, true);
+          });
+        }
+      } catch (err) {}
+    };
+
+    const notifTimer = setInterval(checkNotifications, 3000);
+    return () => clearInterval(notifTimer);
+  }, []);
+
+  const handleViewMerchantProfile = (sellerId: string, merchantName: string) => {
+    const token = localStorage.getItem('lwex_token');
+    fetch('/api/p2p/profile/view', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ sellerId, merchantName })
+    }).catch(() => {});
+
+    triggerToast(`Viewing Merchant Profile: ${merchantName}. Seller has been notified immediately!`, true);
+  };
 
   const fetchOrders = async () => {
     try {
@@ -726,6 +752,7 @@ export default function P2PMarketplace({ currentUser, isDark, onBalanceUpdate, o
                         setSelectedOrderForModal(ord);
                       }}
                       onInitiateTrade={handleInitiateTrade}
+                      onViewMerchantProfile={handleViewMerchantProfile}
                       userBalance={userInfo.balance}
                       currentUser={currentUser || effectiveUser}
                       isSubmitting={isSubmitting}

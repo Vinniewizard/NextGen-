@@ -230,6 +230,13 @@ function getSqliteInstance() {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS settled_trades (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        amount REAL NOT NULL,
+        settled_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS user_states (
         user_id TEXT NOT NULL,
         mode TEXT NOT NULL,
@@ -560,6 +567,13 @@ function getD1Database() {
             referrer_id TEXT NOT NULL,
             referred_user_id TEXT NOT NULL,
             created_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS settled_trades (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            amount REAL NOT NULL,
+            settled_at TEXT NOT NULL
           );
 
           CREATE TABLE IF NOT EXISTS user_states (
@@ -3834,7 +3848,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/users/update-balance', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const { userId, amount, isDemo, consumeForceOutcome } = req.body;
+      const { userId, amount, isDemo, tradeId, consumeForceOutcome } = req.body;
       if (!userId || amount === undefined) {
         return res.status(400).json({ success: false, message: 'userId and amount are required.' });
       }
@@ -3851,6 +3865,33 @@ Active technical indicator values: ${indicatorsString}.`}`;
       }
 
       const now = new Date().toISOString();
+
+      // Idempotency check: Ensure same trade payout is NOT applied twice on refresh or multi-device sync
+      if (tradeId) {
+        const alreadySettled = await db.prepare('SELECT id FROM settled_trades WHERE id = ?').bind(tradeId).first();
+        if (alreadySettled) {
+          const currentBal = isDemo ? (user.demo_balance || 0) : (user.real_balance || 0);
+          return res.json({
+            success: true,
+            alreadySettled: true,
+            balance: currentBal,
+            message: 'Trade was already settled previously.'
+          });
+        }
+
+        try {
+          await db.prepare('INSERT INTO settled_trades (id, user_id, amount, settled_at) VALUES (?, ?, ?, ?)').bind(tradeId, userId, parsedAmount, now).run();
+        } catch (e) {
+          // Unique constraint catch if duplicate concurrent call
+          const currentBal = isDemo ? (user.demo_balance || 0) : (user.real_balance || 0);
+          return res.json({
+            success: true,
+            alreadySettled: true,
+            balance: currentBal,
+            message: 'Trade already settled.'
+          });
+        }
+      }
       let nextBalance = 0;
 
       if (isDemo) {

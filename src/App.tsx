@@ -790,6 +790,9 @@ export default function App() {
                   }
                 });
                 
+                if (finalContracts.length === prev.length && finalContracts.every((c, i) => c.id === prev[i].id)) {
+                  return prev;
+                }
                 return finalContracts;
               });
               
@@ -927,14 +930,25 @@ export default function App() {
       priceState[asset.id] = assetTicks.length > 0 ? assetTicks[assetTicks.length - 1].price : asset.price;
     });
 
-    const walkAsset = (assetId: string, currentPrice: number, stepSec: number) => {
+    const getDeterministicRandom = (seedStr: string): number => {
+      let hash = 0;
+      for (let i = 0; i < seedStr.length; i++) {
+        hash = ((hash << 5) - hash) + seedStr.charCodeAt(i);
+        hash |= 0;
+      }
+      const x = Math.sin(hash) * 10000;
+      return x - Math.floor(x);
+    };
+
+    const walkAsset = (assetId: string, currentPrice: number, stepSec: number, seedStep?: number) => {
       const asset = ASSETSList.find(a => a.id === assetId);
       if (!asset) return currentPrice;
       const trendBias = asset.trendBias;
       const volatility = asset.volatility;
       const volatilityMult = gameSettingsRef.current?.volatilityMultiplier || 1;
       const totalBias = trendBias + (gameSettingsRef.current?.globalTrendBias || 0);
-      const walkFactor = (Math.random() - 0.5 + totalBias) * 1.5;
+      const randVal = seedStep ? getDeterministicRandom(`${assetId}-${seedStep}`) : Math.random();
+      const walkFactor = (randVal - 0.5 + totalBias) * 1.5;
       const stepScale = Math.sqrt(stepSec);
       return currentPrice * (1 + walkFactor * ((volatility * volatilityMult / 100) * stepScale));
     };
@@ -1111,6 +1125,7 @@ export default function App() {
         purchaseTime: contract.entryTime
       };
 
+      markContractSettled(contract.id);
       history.push(histItem);
       balanceDeltaTotal += finalPayout;
       
@@ -1123,6 +1138,7 @@ export default function App() {
             userId: currentUserRef.current.id,
             amount: finalPayout,
             isDemo,
+            tradeId: contract.id,
             consumeForceOutcome: false
           })
         })
@@ -1137,7 +1153,7 @@ export default function App() {
       const stepInterval = 1000;
       for (let t = lastTickTime + stepInterval; t <= maxExpiry; t += stepInterval) {
         ASSETSList.forEach(asset => {
-          priceState[asset.id] = walkAsset(asset.id, priceState[asset.id], 1);
+          priceState[asset.id] = walkAsset(asset.id, priceState[asset.id], 1, t);
           if (t >= now - 6000 * 1000) {
             accumulatedTicks[asset.id].push({ time: t, price: priceState[asset.id] });
           }
@@ -1484,7 +1500,7 @@ export default function App() {
       syncInterval = setInterval(() => {
         syncUserBalance();
         pullUserState();
-      }, 1500); // Increased rate for faster cross-device sync
+      }, 4000);
     } else {
       // Guest fallback
       const currAcc = accountRef.current;
@@ -1577,7 +1593,25 @@ export default function App() {
 
   const activeStakes = useMemo(() => activeContracts.reduce((sum, c) => sum + c.stake, 0), [activeContracts]);
   const freeBalance = Math.max(0, (account?.balance || 0) - activeStakes);
-  const settledContractIdsRef = useRef<Set<string>>(new Set());
+
+  const loadSettledContractIds = (): Set<string> => {
+    try {
+      const saved = localStorage.getItem('lwex_settled_contract_ids');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch (e) {
+      return new Set();
+    }
+  };
+
+  const settledContractIdsRef = useRef<Set<string>>(loadSettledContractIds());
+
+  const markContractSettled = (id: string) => {
+    settledContractIdsRef.current.add(id);
+    try {
+      localStorage.setItem('lwex_settled_contract_ids', JSON.stringify(Array.from(settledContractIdsRef.current)));
+    } catch (e) {}
+  };
+
   const isSubmittingTradeRef = useRef<boolean>(false);
   const [liveClockTime, setLiveClockTime] = useState<number>(() => Date.now());
 

@@ -104,7 +104,12 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
   const [loginMethod, setLoginMethod] = useState<'creds' | 'key'>('creds');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'stats' | 'users' | 'deposits' | 'completed_deposits' | 'withdrawals' | 'game' | 'telegram' | 'visits'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'users' | 'deposits' | 'completed_deposits' | 'withdrawals' | 'p2p' | 'game' | 'telegram' | 'visits'>('stats');
+  const [p2pOrders, setP2pOrders] = useState<any[]>([]);
+  const [p2pTrades, setP2pTrades] = useState<any[]>([]);
+  const [selectedDisputeChat, setSelectedDisputeChat] = useState<any | null>(null);
+  const [disputeNote, setDisputeNote] = useState('');
+  const [isResolvingDispute, setIsResolvingDispute] = useState(false);
   const [visitsData, setVisitsData] = useState<{
     visitsCount: number;
     uniqueVisitors: number;
@@ -608,6 +613,24 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
 
         fetchTelegramAddons();
 
+        // Fetch P2P orders & trades
+        try {
+          const [p2pOrdRes, p2pTrdRes] = await Promise.all([
+            fetch('/api/admin/p2p/orders', { headers: { 'x-admin-key': key } }),
+            fetch('/api/admin/p2p/trades', { headers: { 'x-admin-key': key } })
+          ]);
+          if (p2pOrdRes.ok) {
+            const oData = await p2pOrdRes.json();
+            setP2pOrders(oData.orders || []);
+          }
+          if (p2pTrdRes.ok) {
+            const tData = await p2pTrdRes.json();
+            setP2pTrades(tData.trades || []);
+          }
+        } catch (p2pErr) {
+          console.error('P2P fetch error:', p2pErr);
+        }
+
         setIsAuthenticated(true);
       } else {
         triggerToast('Invalid admin key', false);
@@ -1067,12 +1090,13 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
             <div className="flex items-center space-x-1 border-b border-slate-200 dark:border-slate-800 mb-6 overflow-x-auto pb-3">
               {[
                 { id: 'stats', label: 'Overview', icon: TrendingUp },
-                { id: 'users', label: 'Users', icon: Users },
+                { id: 'users', label: 'Users & Balances', icon: Users },
                 { id: 'deposits', label: 'Pending Deposits', icon: ArrowDownCircle },
                 { id: 'completed_deposits', label: 'Completed Deposits', icon: ArrowDownCircle },
                 { id: 'withdrawals', label: 'Withdrawals', icon: ArrowDownCircle },
-                { id: 'game', label: 'Game Control', icon: DollarSign },
-                { id: 'telegram', label: 'Telegram Analytics', icon: BarChart2 },
+                { id: 'p2p', label: 'P2P Escrow & Ads', icon: Sparkles },
+                { id: 'game', label: 'Game Control & A/B Engine', icon: DollarSign },
+                { id: 'telegram', label: 'Telegram & Social Bots', icon: BarChart2 },
                 { id: 'visits', label: 'Traffic & Referrals', icon: Globe }
               ].map(tab => {
                 const isActive = activeTab === tab.id;
@@ -1878,6 +1902,128 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
                       </table>
                     </div>
                   )}
+                </div>
+              )}
+
+              {activeTab === 'p2p' && (
+                <div className="space-y-6">
+                  {/* P2P Trades & Escrow Disputes */}
+                  <div className="border border-slate-800 rounded-lg p-5 bg-slate-900 shadow-xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-base font-bold text-yellow-400 flex items-center gap-2">
+                          <Sparkles className="h-5 w-5 text-yellow-500" />
+                          P2P Active Trades & Escrow Disputes ({p2pTrades.length})
+                        </h3>
+                        <p className="text-xs text-slate-400">Monitor live P2P buyer/seller trades and force resolve disputes.</p>
+                      </div>
+                      <button 
+                        onClick={() => fetchData(adminKey)}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded cursor-pointer transition border border-slate-700"
+                      >
+                        Refresh Trades
+                      </button>
+                    </div>
+
+                    {p2pTrades.length === 0 ? (
+                      <p className="text-xs text-slate-500 italic py-6 text-center">No active P2P trades recorded yet.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[10px] font-black uppercase tracking-wider">
+                              <th className="p-3">Trade ID</th>
+                              <th className="p-3">Buyer ID</th>
+                              <th className="p-3">Seller ID</th>
+                              <th className="p-3">Amount</th>
+                              <th className="p-3">Fiat Total</th>
+                              <th className="p-3">Status</th>
+                              <th className="p-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/60">
+                            {p2pTrades.map((trade) => {
+                              const isDisputed = trade.status === 'disputed';
+                              return (
+                                <tr key={trade.id} className={`hover:bg-slate-800/40 ${isDisputed ? 'bg-red-950/30' : ''}`}>
+                                  <td className="p-3 font-mono text-[11px] font-bold text-slate-200">{trade.id}</td>
+                                  <td className="p-3 font-mono text-slate-300">{trade.buyer_id}</td>
+                                  <td className="p-3 font-mono text-slate-300">{trade.seller_id}</td>
+                                  <td className="p-3 font-bold text-emerald-400">{trade.amount} {trade.coin}</td>
+                                  <td className="p-3 font-bold text-yellow-400">{trade.fiat_amount} {trade.fiat_currency}</td>
+                                  <td className="p-3">
+                                    <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                                      trade.status === 'disputed' ? 'bg-red-500 text-white animate-pulse' :
+                                      trade.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                                      trade.status === 'payment_sent' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                                      'bg-slate-800 text-slate-300'
+                                    }`}>
+                                      {trade.status}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <button
+                                      onClick={() => setSelectedDisputeChat(trade)}
+                                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded cursor-pointer transition"
+                                    >
+                                      Inspect Chat & Resolve
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* P2P Merchant Ads */}
+                  <div className="border border-slate-800 rounded-lg p-5 bg-slate-900 shadow-xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-base font-bold text-emerald-400">P2P Merchant Order Book ({p2pOrders.length})</h3>
+                        <p className="text-xs text-slate-400">All registered system merchant buy/sell advertisements.</p>
+                      </div>
+                    </div>
+
+                    {p2pOrders.length === 0 ? (
+                      <p className="text-xs text-slate-500 italic py-6 text-center">No merchant orders found.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[10px] font-black uppercase tracking-wider">
+                              <th className="p-3">Merchant</th>
+                              <th className="p-3">Type</th>
+                              <th className="p-3">Rate</th>
+                              <th className="p-3">Limits</th>
+                              <th className="p-3">Payment Method</th>
+                              <th className="p-3">Completion Rate</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/60">
+                            {p2pOrders.map((ord) => (
+                              <tr key={ord.id} className="hover:bg-slate-800/40">
+                                <td className="p-3 font-bold text-slate-200">{ord.merchant_name}</td>
+                                <td className="p-3">
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                                    ord.type === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                                  }`}>
+                                    {ord.type}
+                                  </span>
+                                </td>
+                                <td className="p-3 font-bold text-yellow-400">{ord.unit_price} {ord.currency} / {ord.coin}</td>
+                                <td className="p-3 text-slate-300">{ord.min_limit} - {ord.max_limit} {ord.currency}</td>
+                                <td className="p-3 font-medium text-slate-300">{ord.payment_method}</td>
+                                <td className="p-3 font-bold text-emerald-400">{ord.completion_rate}% ({ord.total_trades} trades)</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -3017,6 +3163,145 @@ export default function AdminDashboard({ isOpen, onClose, theme, triggerToast }:
                 </div>
               )}
             </div>
+
+        {/* Inspect P2P Dispute Chat Modal */}
+        {selectedDisputeChat && (
+          <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+              <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+                <div>
+                  <h3 className="text-sm font-bold text-yellow-400 flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-yellow-500" />
+                    P2P Escrow Dispute Room (Trade #{selectedDisputeChat.id})
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Buyer: <span className="font-mono text-slate-200">{selectedDisputeChat.buyer_id}</span> | Seller: <span className="font-mono text-slate-200">{selectedDisputeChat.seller_id}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSelectedDisputeChat(null)}
+                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-slate-950/50">
+                <div className="p-3 bg-slate-900 border border-slate-800 rounded text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Escrow Locked:</span>
+                    <span className="font-bold text-emerald-400">{selectedDisputeChat.amount} {selectedDisputeChat.coin}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Payment Amount:</span>
+                    <span className="font-bold text-yellow-400">{selectedDisputeChat.fiat_amount} {selectedDisputeChat.fiat_currency}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Payment Method:</span>
+                    <span className="font-medium text-slate-200">{selectedDisputeChat.payment_method}</span>
+                  </div>
+                </div>
+
+                <div className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Audit Chat Log</div>
+                <div className="space-y-2 max-h-48 overflow-y-auto p-2 bg-slate-900 rounded border border-slate-800 text-xs">
+                  {(() => {
+                    let msgs: any[] = [];
+                    try { msgs = JSON.parse(selectedDisputeChat.chat_messages || '[]'); } catch (e) {}
+                    if (msgs.length === 0) return <p className="text-slate-500 italic text-center">No chat messages exchanged.</p>;
+                    return msgs.map((m: any, idx: number) => (
+                      <div key={idx} className={`p-2 rounded ${m.sender === 'system' ? 'bg-indigo-950/60 border border-indigo-800/40 text-indigo-300' : 'bg-slate-800/80 text-slate-200'}`}>
+                        <div className="flex justify-between text-[9px] text-slate-400 font-bold mb-0.5">
+                          <span>{m.sender}</span>
+                          <span>{m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : ''}</span>
+                        </div>
+                        <p className="text-xs">{m.text}</p>
+                      </div>
+                    ));
+                  })()}
+                </div>
+
+                <div className="space-y-1.5 pt-2">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">Resolution Note / Audit Reason</label>
+                  <input
+                    type="text"
+                    value={disputeNote}
+                    onChange={(e) => setDisputeNote(e.target.value)}
+                    placeholder="e.g., M-Pesa receipt verified, payment received by merchant."
+                    className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-100 focus:outline-none focus:border-yellow-500"
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 border-t border-slate-800 bg-slate-950 flex flex-col sm:flex-row gap-2">
+                <button
+                  disabled={isResolvingDispute}
+                  onClick={async () => {
+                    setIsResolvingDispute(true);
+                    try {
+                      const res = await fetch(`/api/admin/p2p/trades/${selectedDisputeChat.id}/resolve`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-admin-key': adminKey
+                        },
+                        body: JSON.stringify({ action: 'release_to_buyer', note: disputeNote })
+                      });
+                      const data = await res.json();
+                      if (data.success) {
+                        triggerToast(data.message, true);
+                        setSelectedDisputeChat(null);
+                        setDisputeNote('');
+                        fetchData(adminKey);
+                      } else {
+                        triggerToast(data.message || 'Failed to resolve dispute', false);
+                      }
+                    } catch (e: any) {
+                      triggerToast('Error resolving dispute: ' + e.message, false);
+                    } finally {
+                      setIsResolvingDispute(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded cursor-pointer transition flex items-center justify-center gap-1.5"
+                >
+                  🟢 Release Escrow to Buyer
+                </button>
+
+                <button
+                  disabled={isResolvingDispute}
+                  onClick={async () => {
+                    setIsResolvingDispute(true);
+                    try {
+                      const res = await fetch(`/api/admin/p2p/trades/${selectedDisputeChat.id}/resolve`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-admin-key': adminKey
+                        },
+                        body: JSON.stringify({ action: 'refund_to_seller', note: disputeNote })
+                      });
+                      const data = await res.json();
+                      if (data.success) {
+                        triggerToast(data.message, true);
+                        setSelectedDisputeChat(null);
+                        setDisputeNote('');
+                        fetchData(adminKey);
+                      } else {
+                        triggerToast(data.message || 'Failed to resolve dispute', false);
+                      }
+                    } catch (e: any) {
+                      triggerToast('Error resolving dispute: ' + e.message, false);
+                    } finally {
+                      setIsResolvingDispute(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs rounded cursor-pointer transition flex items-center justify-center gap-1.5"
+                >
+                  🔴 Refund Escrow to Seller
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
             <button
               onClick={() => {

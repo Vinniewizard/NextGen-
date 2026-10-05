@@ -158,21 +158,8 @@ export default function AuthModal({ isOpen, onClose, theme, onSuccess, initialVi
 
       let cleanPhone = phone.replace(/[\s\-\+\(\)]/g, '');
       const format = countryFormats[country];
-      if (format) {
-        if (!cleanPhone.startsWith(format.code)) {
-          cleanPhone = format.code + cleanPhone;
-        }
-        if (cleanPhone.length !== format.length) {
-          setFormError(`Please enter a valid phone number for ${country} (${format.length} digits required, incl. country code).`);
-          setIsLoading(false);
-          return;
-        }
-      } else {
-        if (!/^\d{9,15}$/.test(cleanPhone)) {
-          setFormError('Please enter a valid phone number (9 to 15 digits).');
-          setIsLoading(false);
-          return;
-        }
+      if (format && cleanPhone && !cleanPhone.startsWith(format.code)) {
+        cleanPhone = format.code + cleanPhone;
       }
 
       const params = new URLSearchParams(window.location.search);

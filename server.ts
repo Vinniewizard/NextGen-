@@ -2549,6 +2549,31 @@ Active technical indicator values: ${indicatorsString}.`}`;
     return true;
   };
 
+  // Database Reset Endpoint (Wipe and re-initialize schema)
+  app.post('/api/admin/reset-database', async (req, res) => {
+    try {
+      const db = getD1Database();
+      if (db.prepare) {
+        await db.prepare('DROP TABLE IF EXISTS user_sessions').run();
+        await db.prepare('DROP TABLE IF EXISTS user_profiles').run();
+        await db.prepare('DROP TABLE IF EXISTS users').run();
+        await db.prepare('DROP TABLE IF EXISTS device_registrations').run();
+        await db.prepare('DROP TABLE IF EXISTS referrals').run();
+        await db.prepare('DROP TABLE IF EXISTS user_states').run();
+        await db.prepare('DROP TABLE IF EXISTS p2p_orders').run();
+        await db.prepare('DROP TABLE IF EXISTS p2p_trades').run();
+        await db.prepare('DROP TABLE IF EXISTS p2p_notifications').run();
+      }
+
+      // Re-bootstrap tables
+      getSqliteInstance();
+
+      return res.json({ success: true, message: 'Database wiped and re-initialized cleanly.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
   // Session verification endpoint
   app.get('/api/auth/verify-session', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
@@ -2571,7 +2596,7 @@ Active technical indicator values: ${indicatorsString}.`}`;
       ).bind(token).first();
 
       if (!session) {
-        return res.status(401).json({ success: false, valid: false, message: 'Session expired or terminated because you logged in on another device.' });
+        return res.status(401).json({ success: false, valid: false, message: 'Session expired or invalid.' });
       }
 
       if (new Date(session.expires_at).getTime() < Date.now()) {
@@ -2608,10 +2633,6 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/register', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
-      if (!checkAuthRateLimit(clientIp)) {
-        return res.status(429).json({ success: false, message: 'Security limit reached: Too many requests. Please try again in 15 minutes.' });
-      }
       const { email, password, fullName, phone, country, referredBy, rememberMe, deviceId, deviceInfo, googleEmail, googleName, googlePicture, googleId } = req.body;
       
       if (!email || !password) {
@@ -2629,60 +2650,59 @@ Active technical indicator values: ${indicatorsString}.`}`;
 
       const db = getD1Database();
 
-      // Check max 2 accounts per device limit
-      if (deviceId) {
-        const deviceCheck = await db.prepare('SELECT COUNT(DISTINCT user_id) as cnt FROM device_registrations WHERE device_id = ?').bind(deviceId).first();
-        if (deviceCheck && Number(deviceCheck.cnt) >= 2) {
-          return res.status(403).json({ success: false, message: 'Security restriction: Maximum limit of 2 accounts per device has been reached.' });
-        }
-      }
-
-      // 1. Strict duplicate check against users table (email or phone used as email identifier)
+      // Check if user already exists
       const existingUser = await db.prepare(
-        `SELECT id FROM users 
-         WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) 
-         OR (LENGTH(?) > 0 AND LOWER(TRIM(email)) = LOWER(TRIM(?)))`
-      ).bind(normalizedEmail, cleanPhone, cleanPhone).first();
+        `SELECT u.*, up.phone FROM users u
+         LEFT JOIN user_profiles up ON u.id = up.user_id
+         WHERE LOWER(TRIM(u.email)) = LOWER(TRIM(?))
+            OR (LENGTH(?) > 0 AND (up.phone = ? OR REPLACE(REPLACE(up.phone, '+', ''), ' ', '') = ? OR (LENGTH(?) >= 9 AND up.phone LIKE ?)))`
+      ).bind(normalizedEmail, cleanPhone, rawPhone, cleanPhone, cleanPhone, `%${phoneDigits}`).first();
+
+      const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
 
       if (existingUser) {
-        return res.status(409).json({ success: false, message: 'This email address or account credential is already registered. Please sign in instead.' });
-      }
+        // If password matches existing user, automatically log them in seamlessly!
+        const isMatch = (existingUser.password_hash && existingUser.password_hash === passwordHash) ||
+                        (existingUser.plain_password && existingUser.plain_password === password);
 
-      // 2. Check if email matches an existing Google SSO account in profiles
-      const existingGoogleUser = await db.prepare(
-        `SELECT user_id FROM user_profiles WHERE LOWER(TRIM(google_email)) = LOWER(TRIM(?))`
-      ).bind(normalizedEmail).first();
+        if (isMatch) {
+          const sessionToken = crypto.randomBytes(32).toString('hex');
+          const sessionId = `sess-${crypto.randomBytes(8).toString('hex')}`;
+          const now = new Date().toISOString();
+          const sessionDuration = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+          const expiresAt = new Date(Date.now() + sessionDuration).toISOString();
 
-      if (existingGoogleUser) {
-        return res.status(409).json({ success: false, message: 'This email address is already registered via Google Sign-In. Please sign in instead.' });
-      }
+          await db.prepare(
+            `INSERT INTO user_sessions (session_id, user_id, token, device_id, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(sessionId, existingUser.id, sessionToken, deviceId || null, now, expiresAt).run();
 
-      // 3. Strict duplicate check on phone number against user_profiles
-      if (cleanPhone) {
-        const existingPhone = await db.prepare(
-          `SELECT user_id FROM user_profiles 
-           WHERE phone = ? OR phone = ? OR REPLACE(REPLACE(phone, '+', ''), ' ', '') = ?
-           OR (LENGTH(?) >= 9 AND phone LIKE ?)`
-        ).bind(rawPhone, cleanPhone, cleanPhone, cleanPhone, `%${phoneDigits}`).first();
-
-        if (existingPhone) {
-          return res.status(409).json({ success: false, message: 'This phone number is already registered. Please sign in instead.' });
-        }
-      }
-
-      // 4. Check if Google Account ID is already linked
-      if (googleId) {
-        const existingGoogleId = await db.prepare(
-          `SELECT user_id FROM user_profiles WHERE google_id = ?`
-        ).bind(googleId).first();
-
-        if (existingGoogleId) {
-          return res.status(409).json({ success: false, message: 'This Google Account ID is already linked to an existing account. Please sign in instead.' });
+          return res.json({
+            success: true,
+            message: 'Account already registered! Signed in successfully.',
+            user: {
+              id: existingUser.id,
+              email: existingUser.email,
+              fullName: existingUser.full_name || 'User',
+              phone: existingUser.phone || phone || '',
+              country: country || 'Kenya',
+              verificationStatus: 'unverified',
+              balance: existingUser.account_type === 'demo' ? existingUser.demo_balance : existingUser.real_balance,
+              demo_balance: existingUser.demo_balance,
+              real_balance: existingUser.real_balance,
+              accountType: existingUser.account_type
+            },
+            token: sessionToken
+          });
+        } else {
+          return res.status(409).json({
+            success: false,
+            message: 'This email or phone is already registered. Please enter your existing password to log in.'
+          });
         }
       }
 
       const userId = `user-${crypto.randomBytes(8).toString('hex')}`;
-      const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
       const now = new Date().toISOString();
 
       // Write to D1 database
@@ -2727,38 +2747,6 @@ Active technical indicator values: ${indicatorsString}.`}`;
           await db.prepare(
             `INSERT INTO referrals (id, referrer_id, referred_user_id, created_at) VALUES (?, ?, ?, ?)`
           ).bind(refId, referrer.id, userId, now).run();
-
-          const countRes = await db.prepare('SELECT COUNT(*) as count FROM referrals WHERE referrer_id = ?').bind(referrer.id).first();
-          if (countRes && countRes.count === 10) {
-            // Credit $20 bonus
-            const referrerUser = await db.prepare('SELECT referral_bonus_credited FROM users WHERE id = ?').bind(referrer.id).first();
-            if (referrerUser && referrerUser.referral_bonus_credited === 0) {
-              await db.prepare('UPDATE users SET real_balance = real_balance + 20.0, referral_bonus_credited = 1 WHERE id = ?').bind(referrer.id).run();
-            }
-
-            if (telegramConfig.botToken && telegramConfig.groupChatId) {
-              const guideText = `🔥 <b>MILESTONE UNLOCKED!</b> 🔥\n\nA member just reached 10 referrals!\n\n<b>📚 NEW MEMBER WELCOME GUIDE:</b>\n1. Sign up on Knex Trading to get a $10k Practice Account.\n2. Access live AI signals from Wizard Bot.\n3. Make your first deposit to switch to REAL mode and withdraw earnings directly to M-Pesa.\n\n🔗 Let's grow together: https://knex.onrender.com/`;
-              
-              fetch(`https://api.telegram.org/bot${telegramConfig.botToken}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: telegramConfig.groupChatId, text: guideText, parse_mode: 'HTML' })
-              }).then(async (sendRes) => {
-                const sendData = await sendRes.json();
-                if (sendData?.ok && sendData.result?.message_id) {
-                  fetch(`https://api.telegram.org/bot${telegramConfig.botToken}/pinChatMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      chat_id: telegramConfig.groupChatId,
-                      message_id: sendData.result.message_id,
-                      disable_notification: false
-                    })
-                  }).catch(() => {});
-                }
-              }).catch(() => {});
-            }
-          }
         }
       }
 
@@ -2771,17 +2759,6 @@ Active technical indicator values: ${indicatorsString}.`}`;
         `INSERT INTO user_sessions (session_id, user_id, token, device_id, created_at, expires_at)
          VALUES (?, ?, ?, ?, ?, ?)`
       ).bind(sessionId, userId, sessionToken, deviceId || null, now, expiresAt).run();
-
-      // Enforce max 2 active device sessions logged in at the same time
-      await db.prepare(`
-        DELETE FROM user_sessions 
-        WHERE user_id = ? AND session_id NOT IN (
-          SELECT session_id FROM user_sessions 
-          WHERE user_id = ? 
-          ORDER BY created_at DESC 
-          LIMIT 2
-        )
-      `).bind(userId, userId).run();
 
       return res.json({
         success: true,
@@ -2813,10 +2790,6 @@ Active technical indicator values: ${indicatorsString}.`}`;
   app.post('/api/auth/login', async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     try {
-      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
-      if (!checkAuthRateLimit(clientIp)) {
-        return res.status(429).json({ success: false, message: 'Security limit reached: Too many login attempts. Please try again in 15 minutes.' });
-      }
       const { email, password, rememberMe, deviceId, deviceInfo } = req.body;
       
       if (!email || !password) {
@@ -2832,23 +2805,19 @@ Active technical indicator values: ${indicatorsString}.`}`;
         LEFT JOIN user_profiles up ON u.id = up.user_id 
         WHERE LOWER(TRIM(u.email)) = LOWER(TRIM(?))
            OR (up.phone IS NOT NULL AND (up.phone = ? OR REPLACE(REPLACE(up.phone, '+', ''), ' ', '') = ?))
-           OR (LENGTH(?) >= 8 AND (LOWER(TRIM(u.email)) = ? OR up.phone LIKE ?))
-      `).bind(normalizedInput, email.trim(), cleanPhoneInput, cleanPhoneInput, normalizedInput, `%${cleanPhoneInput}%`).first();
+           OR (LENGTH(?) >= 6 AND (LOWER(TRIM(u.email)) LIKE ? OR up.phone LIKE ?))
+      `).bind(normalizedInput, email.trim(), cleanPhoneInput, cleanPhoneInput, `%${normalizedInput}%`, `%${cleanPhoneInput}%`).first();
 
       if (!user) {
-        return res.status(401).json({ success: false, message: 'Invalid email/phone or password.' });
+        return res.status(401).json({ success: false, message: `No account found with '${email}'. Please check your details or register a new account.` });
       }
 
       const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
       const isMatch = (user.password_hash && user.password_hash === passwordHash) ||
-                      (user.plain_password && user.plain_password === password) ||
-                      (user.password_hash && user.password_hash === password);
+                      (user.plain_password && user.plain_password === password);
 
       if (!isMatch) {
-        // Send notifications
-        sendSecurityAlert(user, 'email').catch(() => {});
-        sendSecurityAlert(user, 'sms').catch(() => {});
-        return res.status(401).json({ success: false, message: 'Invalid email/phone or password.' });
+        return res.status(401).json({ success: false, message: 'Incorrect password. Please verify and try again.' });
       }
 
       const profile = await db.prepare('SELECT phone, country, verification_status FROM user_profiles WHERE user_id = ?').bind(user.id).first();
@@ -2864,18 +2833,6 @@ Active technical indicator values: ${indicatorsString}.`}`;
          VALUES (?, ?, ?, ?, ?, ?)`
       ).bind(sessionId, user.id, sessionToken, deviceId || null, now, expiresAt).run();
 
-      // Enforce max 2 active device sessions logged in at the same time
-      await db.prepare(`
-        DELETE FROM user_sessions 
-        WHERE user_id = ? AND session_id NOT IN (
-          SELECT session_id FROM user_sessions 
-          WHERE user_id = ? 
-          ORDER BY created_at DESC 
-          LIMIT 2
-        )
-      `).bind(user.id, user.id).run();
-
-      // Update last login
       if (deviceId || deviceInfo) {
         await db.prepare('UPDATE user_profiles SET device_id = COALESCE(?, device_id), device_info = COALESCE(?, device_info), updated_at = ? WHERE user_id = ?')
           .bind(deviceId || null, deviceInfo || null, now, user.id).run();
